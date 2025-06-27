@@ -42,7 +42,7 @@ def log_to_google_sheets():
             "ip": data.get("ip", "N/A")
         }
         res = requests.post(
-            "https://script.google.com/macros/s/AKfycbxMrY1STPSvA4xC96xxiDHXo08YRGYWp6_BqJ6qNKkz0OnOhUJDH9O8o7O5jecIPbmU/exec",
+            "https://script.google.com/macros/s/AKfycbyxcVBy2boBhHuPyXS-I4b_DA_2zW8lBMZ_8e9499aWct9OFLUMAKKZRLS28SdjiKjt/exec",
             json=payload
         )
         return {"status": "logged", "code": res.status_code}
