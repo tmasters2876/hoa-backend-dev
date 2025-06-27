@@ -1,0 +1,7 @@
+flask
+openai
+tqdm
+python-dotenv
+supabase
+flask-cors
+requests
