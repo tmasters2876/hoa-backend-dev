@@ -18,7 +18,7 @@ supabase = create_client(
 # === Instant whimsy ===
 def check_instant_whimsy(question_lower):
     creator_keywords = ["creator", "developer", "who made you", "who built you","how were you made", "who created you", "who designed you","who programmed you"]
-    feedback_keywords = ["feedback", "suggestion", "complaint"]
+    #feedback_keywords = ["feedback", "suggestion", "complaint"]
     #age_keywords = ["how old", "your age", "age", "years old"]
     dragon_keywords = ["dragon", "castle", "wizard", "unicorn", "fairy", "goblin", "elf", "moat", "magic"]
 
@@ -30,16 +30,13 @@ def check_instant_whimsy(question_lower):
             "Developed by your HOA members to make your life simpler.",
             "I was created by your fellow community members to provide you with an easy-to-use tool to search your governing documents."
         ])
-    elif any(k in question_lower for k in feedback_keywords):
-        return random.choice([
-            "Currently there is not a feedback form in place. Please check back for future enhancements. For now, please reach out to the board or arc to provide feedback.",
-            "We appreciate your feedback! Currently there is not a feedback form in place. Please reach out to the board or arc to provide feedback.",
-            "Your input is valuable to us. Currently there is not a feedback form in place. Please reach out to the board or arc to provide feedback.",
-            "Your feedback is important to us. Currently there is not a feedback form in place. Please reach out to the board or arc to provide feedback."
-        ])
+    #elif any(k in question_lower for k in feedback_keywords):
+       # return random.choice([
+       #     "Currently there is not a feedback form in place. #Please check back for future enhancements."
+      #  ])
     #elif any(k in question_lower for k in age_keywords):
         #return random.choice([
-          #  "I’m exactly 4 years old in human years — but ageless in # code. Cookies help me stay young!",
+          #  "I"
     #    ])
     elif any(k in question_lower for k in dragon_keywords):
         return random.choice([
