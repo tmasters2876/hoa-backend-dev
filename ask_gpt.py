@@ -9,7 +9,6 @@ from openai import OpenAI
 # =========================
 # Config toggles
 # =========================
-# Show full clause_text for the top N clauses (trimmed to MAX_CHARS) inside <details>.
 INCLUDE_FULL_TEXT_TOP_N = 2
 INCLUDE_FULL_TEXT_MAX_CHARS = 1200
 
@@ -81,7 +80,6 @@ def format_clauses_for_prompt(clauses):
         clause_id = c.get("clause_id", "")
         document = c.get("document", "Unknown")
 
-        # Only include clause_text for the top N to control tokens
         clause_text_full = c.get("clause_text") or ""
         clause_text_to_show = ""
         if clause_text_full and idx <= INCLUDE_FULL_TEXT_TOP_N:
@@ -99,6 +97,7 @@ def format_clauses_for_prompt(clauses):
             f"<strong>Reviewer ID</strong>: <code>{clause_id}</code><br>"
         )
 
+        # Always show clause_text if available for GPT context
         if clause_text_to_show:
             entry += (
                 f"<details><summary>View Full Clause Text</summary>"
@@ -117,22 +116,20 @@ def build_gpt_prompt(question, clause_text, no_matches=False):
         "⚠️ There were no direct matches to this question. Below are general HOA rules that might still help you respond.<br><br>"
         if no_matches else ""
     )
-    return f"""You are an HOA policy assistant. Based on the provided Clause data, answer the resident’s question in clear, friendly, and accurate language.
+    return f"""You are an HOA policy assistant. Use both the clause summaries and original clause texts to answer clearly.
 
 Resident Question:
 {question}
 
 {fallback_msg}
-Below are relevant Clause matches:
+Relevant Clauses:
 {clause_text}
 
-Write your response in this format:
-1. Brief summary of each Clause that might apply
-2. State whether the rules clearly answer the question
-3. If unclear, suggest checking with the ARC
-4. Always close with: “If you have any other questions, feel free to ask!”
-
-Use HTML for citations like this: <a href="link" target="_blank">Art. VI</a>
+Guidelines:
+1. Summarize each relevant clause (use both summary and key clause text).
+2. Clearly state if the rules allow or prohibit the activity (e.g., Airbnb).
+3. If unclear, recommend checking with the ARC.
+4. Close with: “If you have any other questions, feel free to ask!”
 
 ---
 
@@ -143,7 +140,6 @@ Final Answer:
 # Vector + Fallback Matching
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
-    # ---- Vector search ----
     embedding_response = client.embeddings.create(
         model="text-embedding-ada-002",
         input=question,
@@ -161,11 +157,9 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Vector Match"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # ---- Keyword fallback (now includes clause_text) ----
     if len(vector_matches) < 5:
         like = f"%{question}%"
         fallback_matches = []
-
         try:
             query = (
                 supabase
@@ -184,23 +178,9 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
             seen = set()
             queries = []
             q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like)
-            if tags:
-                q1 = q1.contains("tags", tags)
-            if structure_type:
-                q1 = q1.eq("structure_type", structure_type)
-            if concern_level:
-                q1 = q1.eq("concern_level", concern_level)
-            queries.append(q1.limit(5).execute().data or [])
-
             q2 = supabase.from_("clauses").select("*").ilike("clause_text", like)
-            if tags:
-                q2 = q2.contains("tags", tags)
-            if structure_type:
-                q2 = q2.eq("structure_type", structure_type)
-            if concern_level:
-                q2 = q2.eq("concern_level", concern_level)
+            queries.append(q1.limit(5).execute().data or [])
             queries.append(q2.limit(5).execute().data or [])
-
             merged = []
             for chunk in queries:
                 for row in chunk:
@@ -222,11 +202,10 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
 # Soft fallback
 # =========================
 def fetch_soft_fallback_clauses():
-    general_tags = ["shed", "structure", "placement", "approval"]
+    general_tags = ["rental", "lease", "guest house", "tenant"]
     query = supabase.from_("clauses").select("*").contains("tags", general_tags).limit(5)
     result = query.execute()
     fallback_data = result.data or []
-
     for clause in fallback_data:
         clause["match_source"] = "General Soft Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
@@ -234,7 +213,7 @@ def fetch_soft_fallback_clauses():
     if not fallback_data:
         fallback_data = [{
             "precedence_level": "9",
-            "plain_summary": "Standard best practice: Your question is very specific; please check your governing documents or with the ARC or Board for precise guidance.",
+            "plain_summary": "Please check your HOA documents or ARC for specific rental rules.",
             "citation": "General Guideline",
             "link": "",
             "document": "Default Fallback",
@@ -242,7 +221,6 @@ def fetch_soft_fallback_clauses():
             "clause_id": "FALLBACK_GENERAL",
             "clause_text": ""
         }]
-
     return fallback_data
 
 # =========================
@@ -253,12 +231,7 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     if whimsy_reply:
         return whimsy_reply
 
-    raw_clauses = fetch_matching_clauses(
-        question,
-        tags=tags,
-        structure_type=structure_type,
-        concern_level=concern_level
-    )
+    raw_clauses = fetch_matching_clauses(question, tags=tags, structure_type=structure_type, concern_level=concern_level)
 
     unique_clauses = {}
     for clause in raw_clauses:
@@ -274,10 +247,6 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
 
     clause_text = format_clauses_for_prompt(clauses)
     prompt = build_gpt_prompt(question, clause_text, no_matches)
-
-    whimsy_keywords = ["dragon", "castle", "wizard", "unicorn", "fairy", "goblin", "moat", "magic"]
-    if any(word in question.lower() for word in whimsy_keywords):
-        prompt += "\n\nNote: This question appears whimsical. Please answer helpfully with a playful touch if relevant."
 
     gpt_response = client.chat.completions.create(
         model="gpt-4o",
