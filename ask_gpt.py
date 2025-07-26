@@ -7,7 +7,7 @@ from supabase import create_client
 from openai import OpenAI
 
 # =========================
-# Config toggles (non-breaking)
+# Config toggles
 # =========================
 # Show full clause_text for the top N clauses (trimmed to MAX_CHARS) inside <details>.
 INCLUDE_FULL_TEXT_TOP_N = 2
@@ -28,7 +28,10 @@ supabase = create_client(
 # Instant whimsy
 # =========================
 def check_instant_whimsy(question_lower):
-    creator_keywords = ["creator", "developer", "who made you", "who built you","how were you made", "who created you", "who designed you","who programmed you"]
+    creator_keywords = [
+        "creator", "developer", "who made you", "who built you",
+        "how were you made", "who created you", "who designed you", "who programmed you"
+    ]
     dragon_keywords = ["dragon", "castle", "wizard", "unicorn", "fairy", "goblin", "elf", "moat", "magic"]
 
     if any(k in question_lower for k in creator_keywords):
@@ -164,7 +167,6 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         fallback_matches = []
 
         try:
-            # Newer supabase-py supports .or_
             query = (
                 supabase
                 .from_("clauses")
@@ -179,7 +181,6 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
                 query = query.eq("concern_level", concern_level)
             fallback_matches = query.limit(5).execute().data or []
         except Exception:
-            # Fallback path if .or_ isn't supported – do two queries and merge/dedupe
             seen = set()
             queries = []
             q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like)
@@ -248,7 +249,6 @@ def fetch_soft_fallback_clauses():
 # MAIN
 # =========================
 def answer_question(question, tags=None, mode="default", structure_type=None, concern_level=None, output_format="markdown"):
-    # Instant whimsy bypass
     whimsy_reply = check_instant_whimsy(question.lower().strip())
     if whimsy_reply:
         return whimsy_reply
@@ -260,13 +260,11 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
         concern_level=concern_level
     )
 
-    # Deduplicate by clause_id, keeping vector matches priority
     unique_clauses = {}
     for clause in raw_clauses:
         cid = clause.get("clause_id")
         if cid not in unique_clauses and clause.get("match_source") == "Vector Match":
             unique_clauses[cid] = clause
-    # If you also want to include keyword fallbacks when vector <= N, you could extend here.
     clauses = list(unique_clauses.values())
 
     no_matches = False
@@ -279,9 +277,7 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
 
     whimsy_keywords = ["dragon", "castle", "wizard", "unicorn", "fairy", "goblin", "moat", "magic"]
     if any(word in question.lower() for word in whimsy_keywords):
-        prompt += (
-            "\n\nNote: This question appears whimsical. Please answer helpfully with a playful touch if relevant."
-        )
+        prompt += "\n\nNote: This question appears whimsical. Please answer helpfully with a playful touch if relevant."
 
     gpt_response = client.chat.completions.create(
         model="gpt-4o",
@@ -293,7 +289,6 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     )
 
     final_answer = gpt_response.choices[0].message.content
-    # Strip Markdown-style links the model might produce
     final_answer = re.sub(r"\[(.*?)\] \((.*?)\)", r"\1 \2", final_answer)
 
     if output_format == "json":
