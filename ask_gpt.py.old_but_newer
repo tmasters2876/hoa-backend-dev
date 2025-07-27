@@ -58,44 +58,14 @@ def _trim(text, max_chars):
     text = text.strip()
     return text if len(text) <= max_chars else (text[:max_chars] + "…")
 
-def _tokenize(query: str):
-    return [t for t in re.findall(r"[a-zA-Z0-9\-]+", (query or "").lower()) if len(t) > 2]
-
-def _hit_ratio(text: str, tokens):
-    if not text:
-        return 0.0
-    text_l = text.lower()
-    hits = sum(1 for t in tokens if t in text_l)
-    return hits / max(1, len(tokens))
-
-def _score_clause(clause, tokens, source_weight):
-    ps = clause.get("plain_summary", "") or ""
-    ct = clause.get("clause_text", "") or ""
-    both = (ps + " " + ct).lower()
-
-    token_cov = _hit_ratio(both, tokens)
-    precedence = clause.get("precedence_level")
-    try:
-        precedence_bonus = max(0, 10 - int(precedence)) / 100.0
-    except Exception:
-        precedence_bonus = 0.0
-
-    tags = clause.get("tags") or []
-    tag_overlap = 0.0
-    if isinstance(tags, list) and tokens:
-        tag_overlap = len(set(tokens) & {str(t).lower() for t in tags}) / 50.0
-
-    return (
-        source_weight +
-        0.6 * token_cov +
-        0.1 * precedence_bonus +
-        0.05 * tag_overlap
-    )
-
 # =========================
 # Format Clauses
 # =========================
 def format_clauses_for_prompt(clauses):
+    """
+    Formats clauses for display to GPT and to the user.
+    Injects clause_text (trimmed) for the top-N clauses, hidden behind <details>.
+    """
     sorted_clauses = sorted(
         clauses,
         key=lambda c: int(c.get("precedence_level", 99))
@@ -127,6 +97,7 @@ def format_clauses_for_prompt(clauses):
             f"<strong>Reviewer ID</strong>: <code>{clause_id}</code><br>"
         )
 
+        # Always show clause_text if available for GPT context
         if clause_text_to_show:
             entry += (
                 f"<details><summary>View Full Clause Text</summary>"
@@ -166,12 +137,9 @@ Final Answer:
 """
 
 # =========================
-# Vector + Fallback Matching (with ranking)
+# Vector + Fallback Matching
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
-    tokens = _tokenize(question)
-
-    # Vector search
     embedding_response = client.embeddings.create(
         model="text-embedding-ada-002",
         input=question,
@@ -181,7 +149,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
     response = supabase.rpc("match_clauses", {
         "query_embedding": query_embedding,
         "match_threshold": 0.6,
-        "match_count": 10
+        "match_count": 5
     }).execute()
 
     vector_matches = response.data or []
@@ -189,63 +157,46 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Vector Match"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # Keyword fallback (always run)
-    like = f"%{question}%"
-    fallback_matches = []
-    try:
-        query = (
-            supabase
-            .from_("clauses")
-            .select("*")
-            .or_(f"plain_summary.ilike.{like},clause_text.ilike.{like}")
-        )
-        if tags:
-            query = query.contains("tags", tags)
-        if structure_type:
-            query = query.eq("structure_type", structure_type)
-        if concern_level:
-            query = query.eq("concern_level", concern_level)
-        fallback_matches = query.limit(10).execute().data or []
-    except Exception:
-        seen = set()
-        chunks = []
-        q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like)
-        q2 = supabase.from_("clauses").select("*").ilike("clause_text", like)
-        chunks.append(q1.limit(10).execute().data or [])
-        chunks.append(q2.limit(10).execute().data or [])
-        merged = []
-        for chunk in chunks:
-            for row in chunk:
-                cid = row.get("clause_id") or row.get("id")
-                if cid not in seen:
-                    seen.add(cid)
-                    merged.append(row)
-        fallback_matches = merged
+    if len(vector_matches) < 5:
+        like = f"%{question}%"
+        fallback_matches = []
+        try:
+            query = (
+                supabase
+                .from_("clauses")
+                .select("*")
+                .or_(f"plain_summary.ilike.{like},clause_text.ilike.{like}")
+            )
+            if tags:
+                query = query.contains("tags", tags)
+            if structure_type:
+                query = query.eq("structure_type", structure_type)
+            if concern_level:
+                query = query.eq("concern_level", concern_level)
+            fallback_matches = query.limit(5).execute().data or []
+        except Exception:
+            seen = set()
+            queries = []
+            q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like)
+            q2 = supabase.from_("clauses").select("*").ilike("clause_text", like)
+            queries.append(q1.limit(5).execute().data or [])
+            queries.append(q2.limit(5).execute().data or [])
+            merged = []
+            for chunk in queries:
+                for row in chunk:
+                    cid = row.get("clause_id") or row.get("id")
+                    if cid not in seen:
+                        seen.add(cid)
+                        merged.append(row)
+            fallback_matches = merged[:5]
 
-    for clause in fallback_matches:
-        clause["match_source"] = "Keyword Fallback"
-        clause["clause_id"] = clause.get("clause_id") or clause.get("id")
+        for clause in fallback_matches:
+            clause["match_source"] = "Keyword Fallback"
+            clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # Merge and score
-    scored = []
-    for c in vector_matches:
-        scored.append((_score_clause(c, tokens, 1.0), c))
-    for c in fallback_matches:
-        scored.append((_score_clause(c, tokens, 0.7), c))
+        vector_matches += fallback_matches
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    seen = set()
-    top = []
-    for _, c in scored:
-        cid = c.get("clause_id") or c.get("id")
-        if cid not in seen:
-            seen.add(cid)
-            top.append(c)
-        if len(top) >= 5:
-            break
-
-    return top
+    return vector_matches
 
 # =========================
 # Soft fallback
@@ -280,7 +231,14 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     if whimsy_reply:
         return whimsy_reply
 
-    clauses = fetch_matching_clauses(question, tags=tags, structure_type=structure_type, concern_level=concern_level)
+    raw_clauses = fetch_matching_clauses(question, tags=tags, structure_type=structure_type, concern_level=concern_level)
+
+    unique_clauses = {}
+    for clause in raw_clauses:
+        cid = clause.get("clause_id")
+        if cid not in unique_clauses and clause.get("match_source") == "Vector Match":
+            unique_clauses[cid] = clause
+    clauses = list(unique_clauses.values())
 
     no_matches = False
     if not clauses:
