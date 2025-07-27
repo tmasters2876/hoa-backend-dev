@@ -172,6 +172,7 @@ Guidelines:
 3. If unclear, recommend checking with the ARC.
 4. Close with: “If you have any other questions, feel free to ask!”
 
+Use HTML for citations like this: <a href="link" target="_blank">Art. VI</a>
 ---
 
 Final Answer:
