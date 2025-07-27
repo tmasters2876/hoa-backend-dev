@@ -52,6 +52,14 @@ def check_instant_whimsy(question_lower):
 # =========================
 # Helpers
 # =========================
+STOPWORDS = {
+    "the","a","an","and","or","of","to","in","on","for","with","by","is","are","was","were",
+    "be","can","i","my","our","your","their","as","it","that","this","do","does","did","from",
+    "at","we","you","they","have","has","had","me","us","them","am","will","shall","may",
+    "should","would","could","not","no","yes","if","but","so","than","then","who","what",
+    "when","where","why","how"
+}
+
 def _trim(text, max_chars):
     if not text:
         return ""
@@ -60,6 +68,10 @@ def _trim(text, max_chars):
 
 def _tokenize(query: str):
     return [t for t in re.findall(r"[a-zA-Z0-9\-]+", (query or "").lower()) if len(t) > 2]
+
+def extract_keywords(question: str):
+    words = _tokenize(question)
+    return [w for w in words if w not in STOPWORDS]
 
 def _hit_ratio(text: str, tokens):
     if not text:
@@ -170,8 +182,9 @@ Final Answer:
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
     tokens = _tokenize(question)
+    keywords = extract_keywords(question)
 
-    # Vector search
+    # 1) Vector search
     embedding_response = client.embeddings.create(
         model="text-embedding-ada-002",
         input=question,
@@ -189,15 +202,27 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Vector Match"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # Keyword fallback (always run)
-    like = f"%{question}%"
+    # 2) Keyword fallback (always run)
+    # Build an or_ filter dynamically from extracted keywords.
+    # If we have no decent keywords, fall back to the whole question.
     fallback_matches = []
     try:
+        if keywords:
+            # Build a long OR filter like: plain_summary.ilike.%shed%,clause_text.ilike.%shed%,plain_summary.ilike.%paint%,...
+            parts = []
+            for k in set(keywords):
+                parts.append(f"plain_summary.ilike.%{k}%")
+                parts.append(f"clause_text.ilike.%{k}%")
+            or_filter = ",".join(parts)
+        else:
+            like = f"%{question}%"
+            or_filter = f"plain_summary.ilike.{like},clause_text.ilike.{like}"
+
         query = (
             supabase
             .from_("clauses")
             .select("*")
-            .or_(f"plain_summary.ilike.{like},clause_text.ilike.{like}")
+            .or_(or_filter)
         )
         if tags:
             query = query.contains("tags", tags)
@@ -205,14 +230,29 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
             query = query.eq("structure_type", structure_type)
         if concern_level:
             query = query.eq("concern_level", concern_level)
+
         fallback_matches = query.limit(10).execute().data or []
     except Exception:
+        # older client fallback: two queries
         seen = set()
         chunks = []
-        q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like)
-        q2 = supabase.from_("clauses").select("*").ilike("clause_text", like)
-        chunks.append(q1.limit(10).execute().data or [])
-        chunks.append(q2.limit(10).execute().data or [])
+
+        if keywords:
+            # run multiple ilike queries per keyword and merge
+            merged = []
+            for k in set(keywords):
+                like_k = f"%{k}%"
+                q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like_k)
+                q2 = supabase.from_("clauses").select("*").ilike("clause_text", like_k)
+                chunks.append(q1.limit(10).execute().data or [])
+                chunks.append(q2.limit(10).execute().data or [])
+        else:
+            like = f"%{question}%"
+            q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like)
+            q2 = supabase.from_("clauses").select("*").ilike("clause_text", like)
+            chunks.append(q1.limit(10).execute().data or [])
+            chunks.append(q2.limit(10).execute().data or [])
+
         merged = []
         for chunk in chunks:
             for row in chunk:
@@ -226,7 +266,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Keyword Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # Merge and score
+    # 3) Merge + score + dedupe
     scored = []
     for c in vector_matches:
         scored.append((_score_clause(c, tokens, 1.0), c))
