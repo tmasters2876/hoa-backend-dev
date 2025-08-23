@@ -173,6 +173,7 @@ Guidelines:
 4. Close with: “If you have any other questions, feel free to ask!”
 
 Use HTML for citations like this: <a href="link" target="_blank">Art. VI</a>
+Example: When citing a source like this [Source](https://drive.google.com/file/d/1Km1fGsfmtiMso2Wwkb-crcuOYa3k7a4t/view?usp=drive_link), Use HTML for citations like this: [Source] <a href="https://drive.google.com/file/d/1Km1fGsfmtiMso2Wwkb-crcuOYa3k7a4t/view?usp=drive_link" target="_blank">Art. VI</a>
 ---
 
 Final Answer:
