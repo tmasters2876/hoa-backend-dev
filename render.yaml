@@ -1,6 +1,6 @@
 services:
 - type: web
-  name: hoa-backend
+  name: hoa-backend-dev
   env: python
   plan: free
   buildCommand: "pip install -r requirements.txt"

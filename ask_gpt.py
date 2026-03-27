@@ -1,7 +1,6 @@
 import os
 import re
 import random
-from collections import defaultdict
 from dotenv import load_dotenv
 from supabase import create_client
 from openai import OpenAI
@@ -9,6 +8,7 @@ from openai import OpenAI
 # =========================
 # Config toggles
 # =========================
+# Show full clause_text for the top N clauses (trimmed to MAX_CHARS) inside <details>.
 INCLUDE_FULL_TEXT_TOP_N = 2
 INCLUDE_FULL_TEXT_MAX_CHARS = 1200
 
@@ -43,7 +43,7 @@ def check_instant_whimsy(question_lower):
         ])
     elif any(k in question_lower for k in dragon_keywords):
         return random.choice([
-            "Dragons? I guard HOA secrets like a scaly beast, but I can’t help with fire-breathing dragons. Try fences instead!",
+            "Dragons? I guard HOA secrets like a scaly beast, but I can't help with fire-breathing dragons. Try fences instead!",
             "Ah, dragons and castles! Sadly I handle covenants, not quests. Ask me about sheds!",
             "If you see a wizard in your yard, call the ARC — or maybe just me. 🧙‍♂️"
         ])
@@ -108,6 +108,10 @@ def _score_clause(clause, tokens, source_weight):
 # Format Clauses
 # =========================
 def format_clauses_for_prompt(clauses):
+    """
+    Formats clauses for display to GPT and to the user.
+    Injects clause_text (trimmed) for the top-N clauses, hidden behind <details>.
+    """
     sorted_clauses = sorted(
         clauses,
         key=lambda c: int(c.get("precedence_level", 99))
@@ -122,6 +126,7 @@ def format_clauses_for_prompt(clauses):
         clause_id = c.get("clause_id", "")
         document = c.get("document", "Unknown")
 
+        # Only include clause_text for the top N to control tokens
         clause_text_full = c.get("clause_text") or ""
         clause_text_to_show = ""
         if clause_text_full and idx <= INCLUDE_FULL_TEXT_TOP_N:
@@ -170,17 +175,17 @@ Guidelines:
 1. Summarize each relevant clause (use both summary and key clause text).
 2. Clearly state if the rules allow or prohibit the activity (e.g., Airbnb).
 3. If unclear, recommend checking with the ARC.
-4. Close with: “If you have any other questions, feel free to ask!”
+4. Close with: "If you have any other questions, feel free to ask!"
 
 Use HTML for citations like this: <a href="link" target="_blank">Art. VI</a>
-Example: When citing a source like this [Source](https://drive.google.com/file/d/1Km1fGsfmtiMso2Wwkb-crcuOYa3k7a4t/view?usp=drive_link), Use HTML for citations like this: [Source] <a href="https://drive.google.com/file/d/1Km1fGsfmtiMso2Wwkb-crcuOYa3k7a4t/view?usp=drive_link" target="_blank">Art. VI</a>
+
 ---
 
 Final Answer:
 """
 
 # =========================
-# Vector + Fallback Matching (with ranking)
+# Vector + Keyword Matching (with ranking)
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
     tokens = _tokenize(question)
@@ -204,13 +209,11 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Vector Match"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # 2) Keyword fallback (always run)
-    # Build an or_ filter dynamically from extracted keywords.
-    # If we have no decent keywords, fall back to the whole question.
+    # 2) Keyword fallback (always run — scored alongside vector results)
+    # Build per-keyword OR filter for better precision than a raw question ilike.
     fallback_matches = []
     try:
         if keywords:
-            # Build a long OR filter like: plain_summary.ilike.%shed%,clause_text.ilike.%shed%,plain_summary.ilike.%paint%,...
             parts = []
             for k in set(keywords):
                 parts.append(f"plain_summary.ilike.%{k}%")
@@ -220,28 +223,19 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
             like = f"%{question}%"
             or_filter = f"plain_summary.ilike.{like},clause_text.ilike.{like}"
 
-        query = (
-            supabase
-            .from_("clauses")
-            .select("*")
-            .or_(or_filter)
-        )
+        query = supabase.from_("clauses").select("*").or_(or_filter)
         if tags:
             query = query.contains("tags", tags)
         if structure_type:
             query = query.eq("structure_type", structure_type)
         if concern_level:
             query = query.eq("concern_level", concern_level)
-
         fallback_matches = query.limit(10).execute().data or []
     except Exception:
-        # older client fallback: two queries
+        # Older supabase-py client fallback: run two queries and merge
         seen = set()
         chunks = []
-
         if keywords:
-            # run multiple ilike queries per keyword and merge
-            merged = []
             for k in set(keywords):
                 like_k = f"%{k}%"
                 q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like_k)
@@ -268,7 +262,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Keyword Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # 3) Merge + score + dedupe
+    # 3) Score, merge, dedupe — vector matches get source_weight=1.0, keyword=0.7
     scored = []
     for c in vector_matches:
         scored.append((_score_clause(c, tokens, 1.0), c))
@@ -293,10 +287,10 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
 # Soft fallback
 # =========================
 def fetch_soft_fallback_clauses():
-    general_tags = ["rental", "lease","shed","driveway", "fence","guest house","park", "parking", "tenant"]
-    query = supabase.from_("clauses").select("*").contains("tags", general_tags).limit(5)
-    result = query.execute()
+    general_tags = ["rental", "lease", "shed", "driveway", "fence", "guest house", "park", "parking", "tenant"]
+    result = supabase.from_("clauses").select("*").contains("tags", general_tags).limit(5).execute()
     fallback_data = result.data or []
+
     for clause in fallback_data:
         clause["match_source"] = "General Soft Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
@@ -304,7 +298,7 @@ def fetch_soft_fallback_clauses():
     if not fallback_data:
         fallback_data = [{
             "precedence_level": "9",
-            "plain_summary": "Please check your HOA documents or ARC for specific rental rules.",
+            "plain_summary": "Please check your HOA documents or ARC for specific guidance on this question.",
             "citation": "General Guideline",
             "link": "",
             "document": "Default Fallback",
@@ -312,6 +306,7 @@ def fetch_soft_fallback_clauses():
             "clause_id": "FALLBACK_GENERAL",
             "clause_text": ""
         }]
+
     return fallback_data
 
 # =========================
@@ -322,7 +317,12 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     if whimsy_reply:
         return whimsy_reply
 
-    clauses = fetch_matching_clauses(question, tags=tags, structure_type=structure_type, concern_level=concern_level)
+    clauses = fetch_matching_clauses(
+        question,
+        tags=tags,
+        structure_type=structure_type,
+        concern_level=concern_level
+    )
 
     no_matches = False
     if not clauses:
@@ -342,6 +342,7 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     )
 
     final_answer = gpt_response.choices[0].message.content
+    # Strip Markdown-style links the model might produce
     final_answer = re.sub(r"\[(.*?)\] \((.*?)\)", r"\1 \2", final_answer)
 
     if output_format == "json":
