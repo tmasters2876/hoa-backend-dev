@@ -59,6 +59,25 @@ STOPWORDS = {
     "when","where","why","how"
 }
 
+QUERY_EXPANSIONS = {
+    "ac": "air conditioning",
+    "a/c": "air conditioning",
+    "rv": "recreational vehicle",
+    "hoa": "association",
+    "arc": "architectural review committee",
+    "ccr": "covenants conditions restrictions",
+    "dcc": "covenants conditions restrictions",
+    "ev": "electric vehicle",
+    "sq ft": "square footage",
+}
+
+def expand_query(question: str) -> str:
+    """Replace known acronyms with their full forms for better matching."""
+    q = question.lower()
+    for acronym, expansion in QUERY_EXPANSIONS.items():
+        q = re.sub(r'\b' + re.escape(acronym) + r'\b', expansion, q)
+    return q
+
 def _trim(text, max_chars):
     if not text:
         return ""
@@ -183,6 +202,7 @@ Final Answer:
 # Vector + Fallback Matching (with ranking)
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
+    question = expand_query(question)
     tokens = _tokenize(question)
     keywords = extract_keywords(question)
     short_keywords = [t for t in re.findall(r"[a-zA-Z0-9\-]+", question.lower()) if len(t) == 2 and t not in {"in","on","or","to","at","as","is","of","be","it","we","my","by","do","if","so","no","up","an","us"}]
