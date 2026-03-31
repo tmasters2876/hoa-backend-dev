@@ -117,9 +117,9 @@ def _score_clause(clause, tokens, source_weight):
 
     return (
         source_weight +
-        0.6 * token_cov +
+        1.5 * token_cov +
         0.1 * precedence_bonus +
-        0.05 * tag_overlap
+        0.2 * tag_overlap
     )
 
 # =========================
@@ -311,13 +311,19 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
 
     seen = set()
     top = []
-    for _, c in scored:
+    for score, c in scored:
+        if score < 0.5:
+            break  # remaining results are too low-relevance to show
         cid = c.get("clause_id") or c.get("id")
         if cid not in seen:
             seen.add(cid)
             top.append(c)
         if len(top) >= 5:
             break
+
+    # If the threshold cut too aggressively, take top 2 regardless
+    if not top and scored:
+        top = [scored[0][1], scored[1][1]] if len(scored) > 1 else [scored[0][1]]
 
     return top
 
