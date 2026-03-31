@@ -197,9 +197,9 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         "query_embedding": query_embedding,
         "match_threshold": 0.6,
         "match_count": 10
-    }).eq("status", "approved").execute()
+    }).execute()
 
-    vector_matches = response.data or []
+    vector_matches = [r for r in (response.data or []) if r.get("status") == "approved"]
     for clause in vector_matches:
         clause["match_source"] = "Vector Match"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
