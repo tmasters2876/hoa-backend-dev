@@ -66,7 +66,7 @@ def _trim(text, max_chars):
     return text if len(text) <= max_chars else (text[:max_chars] + "…")
 
 def _tokenize(query: str):
-    return [t for t in re.findall(r"[a-zA-Z0-9\-]+", (query or "").lower()) if len(t) > 2]
+    return [t for t in re.findall(r"[a-zA-Z0-9\-]+", (query or "").lower()) if len(t) >= 2]
 
 def extract_keywords(question: str):
     words = _tokenize(question)
@@ -195,7 +195,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
 
     response = supabase.rpc("match_clauses", {
         "query_embedding": query_embedding,
-        "match_threshold": 0.6,
+        "match_threshold": 0.5,
         "match_count": 10
     }).execute()
 
