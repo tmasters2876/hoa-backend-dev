@@ -8,7 +8,6 @@ from openai import OpenAI
 # =========================
 # Config toggles
 # =========================
-# Show full clause_text for the top N clauses (trimmed to MAX_CHARS) inside <details>.
 INCLUDE_FULL_TEXT_TOP_N = 2
 INCLUDE_FULL_TEXT_MAX_CHARS = 1200
 
@@ -108,10 +107,6 @@ def _score_clause(clause, tokens, source_weight):
 # Format Clauses
 # =========================
 def format_clauses_for_prompt(clauses):
-    """
-    Formats clauses for display to GPT and to the user.
-    Injects clause_text (trimmed) for the top-N clauses, hidden behind <details>.
-    """
     sorted_clauses = sorted(
         clauses,
         key=lambda c: int(c.get("precedence_level", 99))
@@ -123,10 +118,8 @@ def format_clauses_for_prompt(clauses):
         link = c.get("link", "")
         summary = c.get("plain_summary", "No summary provided.")
         source = c.get("match_source", "Unknown")
-        clause_id = c.get("clause_id", "")
         document = c.get("document", "Unknown")
 
-        # Only include clause_text for the top N to control tokens
         clause_text_full = c.get("clause_text") or ""
         clause_text_to_show = ""
         if clause_text_full and idx <= INCLUDE_FULL_TEXT_TOP_N:
@@ -140,8 +133,7 @@ def format_clauses_for_prompt(clauses):
         entry = (
             f"<b>{idx}. <strong>Summary</strong>: According to {link_html}, {summary}.</b><br>"
             f"<strong>Match Source</strong>: {source} • "
-            f"<code>{document}</code> • "
-            f"<strong>Reviewer ID</strong>: <code>{clause_id}</code><br>"
+            f"<code>{document}</code><br>"
         )
 
         if clause_text_to_show:
@@ -158,34 +150,37 @@ def format_clauses_for_prompt(clauses):
 # GPT Prompt
 # =========================
 def build_gpt_prompt(question, clause_text, no_matches=False):
-    fallback_msg = (
-        "⚠️ There were no direct matches to this question. Below are general HOA rules that might still help you respond.<br><br>"
-        if no_matches else ""
-    )
-    return f"""You are an HOA policy assistant. Use both the clause summaries and original clause texts to answer clearly.
+    if no_matches:
+        fallback_msg = (
+            "Note: No clauses matched this question directly. "
+            "The clauses below are the closest general rules that may apply — "
+            "they may not address the resident's situation exactly.<br><br>"
+        )
+    else:
+        fallback_msg = ""
 
-Resident Question:
+    return f"""Resident Question:
 {question}
 
-{fallback_msg}
-Relevant Clauses:
+{fallback_msg}Relevant Clauses:
 {clause_text}
 
 Guidelines:
-1. Summarize each relevant clause (use both summary and key clause text).
-2. Clearly state if the rules allow or prohibit the activity (e.g., Airbnb).
-3. If unclear, recommend checking with the ARC.
-4. Close with: "If you have any other questions, feel free to ask!"
-
-Use HTML for citations like this: <a href="link" target="_blank">Art. VI</a>
-
+1. When summarizing a clause, reference the document name (e.g., CCRs, 2022 Builders Guidelines, Texas Property Code) as well as the citation.
+2. Clearly state whether the activity in question is allowed, prohibited, or unclear under the rules provided.
+3. When a clause comes from the Texas Property Code, note that it represents a state law minimum that applies to all HOAs in Texas.
+4. Never fabricate rules or cite documents not represented in the clauses above.
+5. If the provided clauses do not clearly answer the question, say so plainly and recommend the resident contact the ARC or board for a definitive answer.
+6. Never provide legal advice. For specific legal questions, recommend consulting a licensed attorney.
+7. Use HTML for citations: <a href="link" target="_blank">Citation Text</a>
+8. Close with: "If you have any other questions, feel free to ask!"
 ---
 
 Final Answer:
 """
 
 # =========================
-# Vector + Keyword Matching (with ranking)
+# Vector + Fallback Matching (with ranking)
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
     tokens = _tokenize(question)
@@ -202,18 +197,20 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         "query_embedding": query_embedding,
         "match_threshold": 0.6,
         "match_count": 10
-    }).execute()
+    }).eq("status", "approved").execute()
 
     vector_matches = response.data or []
     for clause in vector_matches:
         clause["match_source"] = "Vector Match"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # 2) Keyword fallback (always run — scored alongside vector results)
-    # Build per-keyword OR filter for better precision than a raw question ilike.
+    # 2) Keyword fallback (always run)
+    # Build an or_ filter dynamically from extracted keywords.
+    # If we have no decent keywords, fall back to the whole question.
     fallback_matches = []
     try:
         if keywords:
+            # Build a long OR filter like: plain_summary.ilike.%shed%,clause_text.ilike.%shed%,plain_summary.ilike.%paint%,...
             parts = []
             for k in set(keywords):
                 parts.append(f"plain_summary.ilike.%{k}%")
@@ -223,29 +220,39 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
             like = f"%{question}%"
             or_filter = f"plain_summary.ilike.{like},clause_text.ilike.{like}"
 
-        query = supabase.from_("clauses").select("*").or_(or_filter)
+        query = (
+            supabase
+            .from_("clauses")
+            .select("*")
+            .eq("status", "approved")
+            .or_(or_filter)
+        )
         if tags:
             query = query.contains("tags", tags)
         if structure_type:
             query = query.eq("structure_type", structure_type)
         if concern_level:
             query = query.eq("concern_level", concern_level)
+
         fallback_matches = query.limit(10).execute().data or []
     except Exception:
-        # Older supabase-py client fallback: run two queries and merge
+        # older client fallback: two queries
         seen = set()
         chunks = []
+
         if keywords:
+            # run multiple ilike queries per keyword and merge
+            merged = []
             for k in set(keywords):
                 like_k = f"%{k}%"
-                q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like_k)
-                q2 = supabase.from_("clauses").select("*").ilike("clause_text", like_k)
+                q1 = supabase.from_("clauses").select("*").eq("status", "approved").ilike("plain_summary", like_k)
+                q2 = supabase.from_("clauses").select("*").eq("status", "approved").ilike("clause_text", like_k)
                 chunks.append(q1.limit(10).execute().data or [])
                 chunks.append(q2.limit(10).execute().data or [])
         else:
             like = f"%{question}%"
-            q1 = supabase.from_("clauses").select("*").ilike("plain_summary", like)
-            q2 = supabase.from_("clauses").select("*").ilike("clause_text", like)
+            q1 = supabase.from_("clauses").select("*").eq("status", "approved").ilike("plain_summary", like)
+            q2 = supabase.from_("clauses").select("*").eq("status", "approved").ilike("clause_text", like)
             chunks.append(q1.limit(10).execute().data or [])
             chunks.append(q2.limit(10).execute().data or [])
 
@@ -262,7 +269,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Keyword Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # 3) Score, merge, dedupe — vector matches get source_weight=1.0, keyword=0.7
+    # 3) Merge + score + dedupe
     scored = []
     for c in vector_matches:
         scored.append((_score_clause(c, tokens, 1.0), c))
@@ -287,10 +294,10 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
 # Soft fallback
 # =========================
 def fetch_soft_fallback_clauses():
-    general_tags = ["rental", "lease", "shed", "driveway", "fence", "guest house", "park", "parking", "tenant"]
-    result = supabase.from_("clauses").select("*").contains("tags", general_tags).limit(5).execute()
+    general_tags = ["rental", "lease","shed","driveway", "fence","guest house","park", "parking", "tenant"]
+    query = supabase.from_("clauses").select("*").eq("status", "approved").contains("tags", general_tags).limit(5)
+    result = query.execute()
     fallback_data = result.data or []
-
     for clause in fallback_data:
         clause["match_source"] = "General Soft Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
@@ -298,7 +305,7 @@ def fetch_soft_fallback_clauses():
     if not fallback_data:
         fallback_data = [{
             "precedence_level": "9",
-            "plain_summary": "Please check your HOA documents or ARC for specific guidance on this question.",
+            "plain_summary": "Please check your HOA documents or ARC for specific rental rules.",
             "citation": "General Guideline",
             "link": "",
             "document": "Default Fallback",
@@ -306,7 +313,6 @@ def fetch_soft_fallback_clauses():
             "clause_id": "FALLBACK_GENERAL",
             "clause_text": ""
         }]
-
     return fallback_data
 
 # =========================
@@ -317,12 +323,7 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     if whimsy_reply:
         return whimsy_reply
 
-    clauses = fetch_matching_clauses(
-        question,
-        tags=tags,
-        structure_type=structure_type,
-        concern_level=concern_level
-    )
+    clauses = fetch_matching_clauses(question, tags=tags, structure_type=structure_type, concern_level=concern_level)
 
     no_matches = False
     if not clauses:
@@ -335,14 +336,26 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     gpt_response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are an expert HOA assistant."},
+            {"role": "system", "content": (
+                "You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), "
+                "located in Waller and Grimes Counties, Texas. "
+                "You help residents understand their community's governing documents in plain English. "
+                "The governing documents rank in the following order of authority, from highest to lowest: "
+                "Texas Property Code, then CCRs and Declarations, then Amendments to CCRs, "
+                "then Bylaws, then Board Resolutions and Fine Policies, then the 2022 Builders Guidelines. "
+                "When state law conflicts with HOA documents, note that Texas state law governs. "
+                "Always be helpful and friendly. Never provide legal advice — for legal questions, "
+                "recommend consulting a licensed attorney. "
+                "For decisions requiring board or ARC approval, always recommend the resident contact "
+                "the ARC or board directly for a final determination. "
+                "Never fabricate rules or reference documents not provided in the context."
+            )},
             {"role": "user", "content": prompt}
         ],
         temperature=0.4
     )
 
     final_answer = gpt_response.choices[0].message.content
-    # Strip Markdown-style links the model might produce
     final_answer = re.sub(r"\[(.*?)\] \((.*?)\)", r"\1 \2", final_answer)
 
     if output_format == "json":
