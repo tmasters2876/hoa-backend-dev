@@ -66,7 +66,7 @@ def _trim(text, max_chars):
     return text if len(text) <= max_chars else (text[:max_chars] + "…")
 
 def _tokenize(query: str):
-    return [t for t in re.findall(r"[a-zA-Z0-9\-]+", (query or "").lower()) if len(t) >= 2]
+    return [t for t in re.findall(r"[a-zA-Z0-9\-]+", (query or "").lower()) if len(t) > 2]
 
 def extract_keywords(question: str):
     words = _tokenize(question)
@@ -185,6 +185,8 @@ Final Answer:
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
     tokens = _tokenize(question)
     keywords = extract_keywords(question)
+    short_keywords = [t for t in re.findall(r"[a-zA-Z0-9\-]+", question.lower()) if len(t) == 2 and t not in {"in","on","or","to","at","as","is","of","be","it","we","my","by","do","if","so","no","up","an","us"}]
+    keywords = keywords + short_keywords
 
     # 1) Vector search
     embedding_response = client.embeddings.create(
@@ -213,8 +215,17 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
             # Build a long OR filter like: plain_summary.ilike.%shed%,clause_text.ilike.%shed%,plain_summary.ilike.%paint%,...
             parts = []
             for k in set(keywords):
-                parts.append(f"plain_summary.ilike.%{k}%")
-                parts.append(f"clause_text.ilike.%{k}%")
+                if len(k) <= 3:
+                    # Short acronyms: require spaces/punctuation around them to avoid "each" matching "ac"
+                    parts.append(f"plain_summary.ilike.% {k} %")
+                    parts.append(f"clause_text.ilike.% {k} %")
+                    parts.append(f"plain_summary.ilike.% {k},%")
+                    parts.append(f"clause_text.ilike.% {k},%")
+                    parts.append(f"plain_summary.ilike.% {k}.%")
+                    parts.append(f"clause_text.ilike.% {k}.%")
+                else:
+                    parts.append(f"plain_summary.ilike.%{k}%")
+                    parts.append(f"clause_text.ilike.%{k}%")
             or_filter = ",".join(parts)
         else:
             like = f"%{question}%"
