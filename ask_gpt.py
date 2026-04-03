@@ -321,6 +321,24 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         if len(top) >= 5:
             break
 
+    # Ensure document diversity: if top results are all Texas Property Code,
+    # inject the highest-scoring non-TX-Code clause so residents always see
+    # the actual HOA rule alongside state law minimums.
+    tx_code_doc = "Texas Property Code"
+    has_hoa_clause = any(
+        tx_code_doc not in (c.get("document") or "")
+        for c in top
+    )
+    if not has_hoa_clause and scored:
+        # Find highest-scoring non-TX-Code clause not already in top
+        top_ids = {c.get("clause_id") or c.get("id") for c in top}
+        for score, c in scored:
+            cid = c.get("clause_id") or c.get("id")
+            if cid not in top_ids and tx_code_doc not in (c.get("document") or ""):
+                # Replace the lowest-scoring TX Code clause in top
+                top[-1] = c
+                break
+
     # If the threshold cut too aggressively, take top 2 regardless
     if not top and scored:
         top = [scored[0][1], scored[1][1]] if len(scored) > 1 else [scored[0][1]]
