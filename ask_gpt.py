@@ -69,6 +69,9 @@ QUERY_EXPANSIONS = {
     "dcc": "covenants conditions restrictions",
     "ev": "electric vehicle",
     "sq ft": "square footage",
+    "shingles": "roof shingles alternative materials wind hail resistant",
+    "roofing": "roof shingles alternative materials",
+    "replace roof": "roof shingles alternative materials wind hail resistant",
 }
 
 def expand_query(question: str) -> str:
