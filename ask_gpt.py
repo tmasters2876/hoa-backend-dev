@@ -321,23 +321,33 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         if len(top) >= 5:
             break
 
-    # Ensure document diversity: if top results are all Texas Property Code,
-    # inject the highest-scoring non-TX-Code clause so residents always see
-    # the actual HOA rule alongside state law minimums.
+    # Cap Texas Property Code results at 1 — TX Code sets the legal floor
+    # but residents need to see the actual HOA rules. Allow the single
+    # highest-scoring TX Code clause through, then fill remaining slots
+    # with HOA-specific clauses.
     tx_code_doc = "Texas Property Code"
-    has_hoa_clause = any(
-        tx_code_doc not in (c.get("document") or "")
-        for c in top
-    )
-    if not has_hoa_clause and scored:
-        # Find highest-scoring non-TX-Code clause not already in top
-        top_ids = {c.get("clause_id") or c.get("id") for c in top}
+
+    tx_clauses = [c for c in top if tx_code_doc in (c.get("document") or "")]
+    hoa_clauses = [c for c in top if tx_code_doc not in (c.get("document") or "")]
+
+    if len(tx_clauses) > 1:
+        # Keep only the first (highest-scoring) TX Code clause
+        tx_clauses = tx_clauses[:1]
+
+        # Backfill with highest-scoring HOA clauses not already in top
+        top_ids = {c.get("clause_id") or c.get("id") for c in tx_clauses + hoa_clauses}
         for score, c in scored:
+            if len(tx_clauses) + len(hoa_clauses) >= 5:
+                break
             cid = c.get("clause_id") or c.get("id")
             if cid not in top_ids and tx_code_doc not in (c.get("document") or ""):
-                # Replace the lowest-scoring TX Code clause in top
-                top[-1] = c
-                break
+                hoa_clauses.append(c)
+                top_ids.add(cid)
+
+        top = tx_clauses + hoa_clauses
+
+    # Safety: if top is still all TX Code (no HOA clauses exist for this
+    # topic), leave as-is so residents still get an answer.
 
     # If the threshold cut too aggressively, take top 2 regardless
     if not top and scored:
