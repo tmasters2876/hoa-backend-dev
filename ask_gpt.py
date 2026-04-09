@@ -116,13 +116,24 @@ def _score_clause(clause, tokens, source_weight):
     tags = clause.get("tags") or []
     tag_overlap = 0.0
     if isinstance(tags, list) and tokens:
-        tag_overlap = len(set(tokens) & {str(t).lower() for t in tags}) / 50.0
+        # Single-word token match against tags
+        single_word_match = len(set(tokens) & {str(t).lower() for t in tags})
+
+        # Bonus for multi-word tags that match query phrases
+        # Check if any multi-word tag appears as a substring in the full query
+        query_text = ' '.join(tokens)
+        multi_word_bonus = sum(
+            1 for t in tags
+            if ' ' in str(t) and str(t).lower() in query_text
+        )
+
+        tag_overlap = (single_word_match + multi_word_bonus * 3) / 50.0
 
     return (
         source_weight +
         1.5 * token_cov +
         0.1 * precedence_bonus +
-        0.2 * tag_overlap
+        0.4 * tag_overlap
     )
 
 # =========================
