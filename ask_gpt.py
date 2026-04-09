@@ -81,6 +81,22 @@ QUERY_EXPANSIONS = {
     "fishing": "fishing lake pond recreational access",
 }
 
+PRIORITY_CLAUSES = {
+    "fence height": ["WALLS_01"],
+    "how tall": ["WALLS_01"],
+    "fence tall": ["WALLS_01"],
+    "tall fence": ["WALLS_01"],
+    "fence maximum": ["WALLS_01"],
+    "fence minimum": ["WALLS_01"],
+    "rent house": ["DECCOVCON_P11_39", "USE_06_01"],
+    "rent home": ["DECCOVCON_P11_39", "USE_06_01"],
+    "rent my": ["DECCOVCON_P11_39", "USE_06_01"],
+    "rental": ["DECCOVCON_P11_39", "USE_06_01"],
+    "fish pond": ["DECCOVCON_P10_31", "DECCOVCON_P18_64"],
+    "fishing": ["DECCOVCON_P10_31", "DECCOVCON_P18_64"],
+}
+
+
 def expand_query(question: str) -> str:
     """Replace known acronyms/phrases with their full forms for better matching."""
     q = question.lower()
@@ -93,6 +109,33 @@ def expand_query(question: str) -> str:
     for phrase, expansion in sorted_expansions:
         q = q.replace(phrase, expansion)
     return q
+
+def fetch_priority_clauses(question: str) -> list:
+    """Fetch specific high-priority clauses for known query patterns."""
+    q = question.lower()
+    ids_to_fetch = []
+    for phrase, clause_ids in PRIORITY_CLAUSES.items():
+        if phrase in q:
+            for cid in clause_ids:
+                if cid not in ids_to_fetch:
+                    ids_to_fetch.append(cid)
+
+    if not ids_to_fetch:
+        return []
+
+    try:
+        result = supabase.from_("clauses").select("*").eq("status", "approved").in_(
+            "clause_id", ids_to_fetch
+        ).execute()
+        clauses = result.data or []
+        for c in clauses:
+            c["match_source"] = "Priority Match"
+            c["clause_id"] = c.get("clause_id") or c.get("id")
+        return clauses
+    except Exception as e:
+        print(f"[priority] WARNING: failed to fetch priority clauses: {e}")
+        return []
+
 
 def _trim(text, max_chars):
     if not text:
@@ -327,8 +370,13 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Keyword Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # 3) Merge + score + dedupe
+    # 3) Fetch priority clauses for known query patterns
+    priority_matches = fetch_priority_clauses(question)
+
+    # 4) Merge + score + dedupe
     scored = []
+    for c in priority_matches:
+        scored.append((_score_clause(c, tokens, 1.5), c))  # priority boost
     for c in vector_matches:
         scored.append((_score_clause(c, tokens, 1.0), c))
     for c in fallback_matches:
