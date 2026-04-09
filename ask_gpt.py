@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import random
 from dotenv import load_dotenv
 from supabase import create_client
@@ -70,138 +69,14 @@ QUERY_EXPANSIONS = {
     "dcc": "covenants conditions restrictions",
     "ev": "electric vehicle",
     "sq ft": "square footage",
-    "shingles": "roof shingles alternative materials wind hail resistant",
-    "roofing": "roof shingles alternative materials",
-    "replace roof": "roof shingles alternative materials wind hail resistant",
-    "fence height": "fence height tall maximum minimum feet",
-    "how tall": "height tall maximum feet",
-    "rent my house": "rent rental lease homesite residential",
-    "rent my home": "rent rental lease homesite residential",
-    "can i rent": "rent rental lease homesite residential",
-    "fish": "fishing lake pond recreational access",
-    "fishing": "fishing lake pond recreational access",
 }
-
-PRIORITY_CLAUSES = {
-    "fence height": ["WALLS_01"],
-    "how tall": ["WALLS_01"],
-    "fence tall": ["WALLS_01"],
-    "tall fence": ["WALLS_01"],
-    "fence maximum": ["WALLS_01"],
-    "fence minimum": ["WALLS_01"],
-    "rent house": ["DECCOVCON_P11_39", "USE_06_01"],
-    "rent home": ["DECCOVCON_P11_39", "USE_06_01"],
-    "rent my": ["DECCOVCON_P11_39", "USE_06_01"],
-    "rental": ["DECCOVCON_P11_39", "USE_06_01"],
-    "fish pond": ["DECCOVCON_P10_31", "DECCOVCON_P18_64"],
-    "fishing": ["DECCOVCON_P10_31", "DECCOVCON_P18_64"],
-}
-
 
 def expand_query(question: str) -> str:
-    """Replace known acronyms/phrases with their full forms for better matching."""
+    """Replace known acronyms with their full forms for better matching."""
     q = question.lower()
-    # Sort by length descending so multi-word phrases match before single words
-    sorted_expansions = sorted(
-        QUERY_EXPANSIONS.items(),
-        key=lambda x: len(x[0]),
-        reverse=True
-    )
-    for phrase, expansion in sorted_expansions:
-        q = q.replace(phrase, expansion)
+    for acronym, expansion in QUERY_EXPANSIONS.items():
+        q = re.sub(r'\b' + re.escape(acronym) + r'\b', expansion, q)
     return q
-
-def fetch_priority_clauses(question: str) -> list:
-    """Fetch specific high-priority clauses for known query patterns."""
-    q = question.lower()
-    ids_to_fetch = []
-    for phrase, clause_ids in PRIORITY_CLAUSES.items():
-        if phrase in q:
-            for cid in clause_ids:
-                if cid not in ids_to_fetch:
-                    ids_to_fetch.append(cid)
-
-    if not ids_to_fetch:
-        return []
-
-    try:
-        result = supabase.from_("clauses").select("*").eq("status", "approved").in_(
-            "clause_id", ids_to_fetch
-        ).execute()
-        clauses = result.data or []
-        for c in clauses:
-            c["match_source"] = "Priority Match"
-            c["clause_id"] = c.get("clause_id") or c.get("id")
-        return clauses
-    except Exception as e:
-        print(f"[priority] WARNING: failed to fetch priority clauses: {e}")
-        return []
-
-
-def gpt_filter_clauses(question: str, clauses: list) -> list:
-    """Use GPT to filter and rank candidate clauses by actual relevance
-    to the question. Returns reordered list of relevant clauses only."""
-
-    if not clauses:
-        return clauses
-
-    # Build a compact summary of each clause for GPT to evaluate
-    clause_summaries = []
-    for i, c in enumerate(clauses):
-        cid = c.get("clause_id") or c.get("id") or str(i)
-        summary = c.get("plain_summary") or c.get("clause_text", "")[:200]
-        clause_summaries.append(f"ID: {cid}\nSummary: {summary}")
-
-    clauses_text = "\n\n".join(clause_summaries)
-
-    filter_prompt = f"""Question: {question}
-
-Below are candidate clauses from HOA governing documents.
-Identify which clauses are relevant to answering this question.
-Be inclusive — keep a clause if it contains ANY information that would
-help answer the question, even partially. Only exclude clauses that are
-completely unrelated to the topic.
-
-Return ONLY a JSON array of clause IDs that are relevant, ordered from
-most to least relevant. Keep at least 3 clauses if possible.
-If truly none are relevant, return an empty array [].
-Return ONLY the JSON array, no other text.
-
-Candidate clauses:
-{clauses_text}"""
-
-    try:
-        response = client.chat.completions.create(
-            model=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o"),
-            messages=[
-                {"role": "system", "content": "You are a relevance filter for HOA document search. Return only JSON."},
-                {"role": "user", "content": filter_prompt}
-            ],
-            temperature=0.0,
-            max_tokens=200,
-        )
-        raw = response.choices[0].message.content.strip()
-        # Strip markdown if present
-        raw = re.sub(r'```json|```', '', raw).strip()
-        relevant_ids = json.loads(raw)
-
-        if not isinstance(relevant_ids, list):
-            return clauses
-
-        # Reorder clauses by GPT ranking, keeping only relevant ones
-        by_id = {(c.get("clause_id") or c.get("id")): c for c in clauses}
-        filtered = [by_id[cid] for cid in relevant_ids if cid in by_id]
-
-        # If GPT filtered too aggressively, fall back to original list
-        if len(filtered) < 2:
-            return clauses
-
-        return filtered
-
-    except Exception as e:
-        print(f"[filter] WARNING: GPT relevance filter failed: {e}")
-        return clauses  # fall back to unfiltered on any error
-
 
 def _trim(text, max_chars):
     if not text:
@@ -238,24 +113,13 @@ def _score_clause(clause, tokens, source_weight):
     tags = clause.get("tags") or []
     tag_overlap = 0.0
     if isinstance(tags, list) and tokens:
-        # Single-word token match against tags
-        single_word_match = len(set(tokens) & {str(t).lower() for t in tags})
-
-        # Bonus for multi-word tags that match query phrases
-        # Check if any multi-word tag appears as a substring in the full query
-        query_text = ' '.join(tokens)
-        multi_word_bonus = sum(
-            1 for t in tags
-            if ' ' in str(t) and str(t).lower() in query_text
-        )
-
-        tag_overlap = (single_word_match + multi_word_bonus * 3) / 50.0
+        tag_overlap = len(set(tokens) & {str(t).lower() for t in tags}) / 50.0
 
     return (
         source_weight +
         1.5 * token_cov +
         0.1 * precedence_bonus +
-        0.4 * tag_overlap
+        0.2 * tag_overlap
     )
 
 # =========================
@@ -338,7 +202,6 @@ Final Answer:
 # Vector + Fallback Matching (with ranking)
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
-    original_question = question.lower()
     question = expand_query(question)
     tokens = _tokenize(question)
     keywords = extract_keywords(question)
@@ -353,7 +216,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
     response = supabase.rpc("match_clauses", {
         "query_embedding": query_embedding,
         "match_threshold": 0.6,
-        "match_count": 20
+        "match_count": 10
     }).execute()
 
     vector_matches = [r for r in (response.data or []) if r.get("status") == "approved"]
@@ -391,7 +254,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         if concern_level:
             query = query.eq("concern_level", concern_level)
 
-        fallback_matches = query.limit(20).execute().data or []
+        fallback_matches = query.limit(10).execute().data or []
     except Exception:
         # older client fallback: two queries
         seen = set()
@@ -426,13 +289,8 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["match_source"] = "Keyword Fallback"
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
-    # 3) Fetch priority clauses for known query patterns
-    priority_matches = fetch_priority_clauses(original_question)
-
-    # 4) Merge + score + dedupe
+    # 3) Merge + score + dedupe
     scored = []
-    for c in priority_matches:
-        scored.append((_score_clause(c, tokens, 1.5), c))  # priority boost
     for c in vector_matches:
         scored.append((_score_clause(c, tokens, 1.0), c))
     for c in fallback_matches:
@@ -443,7 +301,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
     seen = set()
     top = []
     for score, c in scored:
-        if score < 0.75:
+        if score < 0.5:
             break  # remaining results are too low-relevance to show
         cid = c.get("clause_id") or c.get("id")
         if cid not in seen:
@@ -481,11 +339,9 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
     # topic), leave as-is so residents still get an answer.
 
     # If the threshold cut too aggressively, take top 2 regardless
-    if not top and scored and scored[0][0] > 0.5:
+    if not top and scored:
         top = [scored[0][1], scored[1][1]] if len(scored) > 1 else [scored[0][1]]
 
-    # Final relevance filter — use GPT to remove off-topic clauses
-    top = gpt_filter_clauses(original_question, top)
     return top
 
 # =========================
