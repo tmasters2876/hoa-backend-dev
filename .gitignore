@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.so
+.env
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.DS_Store
+validate_missing_clauses.py
+import_missing_clauses.py
+missing_candidates_*.csv

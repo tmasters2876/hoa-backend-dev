@@ -1,0 +1,8 @@
+*.csv
+__pycache__/
+.venv/
+venv/
+*.log
+validate_missing_clauses.py
+import_missing_clauses.py
+missing_candidates_*.csv

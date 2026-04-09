@@ -315,7 +315,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
     seen = set()
     top = []
     for score, c in scored:
-        if score < 0.5:
+        if score < 0.75:
             break  # remaining results are too low-relevance to show
         cid = c.get("clause_id") or c.get("id")
         if cid not in seen:
@@ -353,7 +353,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
     # topic), leave as-is so residents still get an answer.
 
     # If the threshold cut too aggressively, take top 2 regardless
-    if not top and scored:
+    if not top and scored and scored[0][0] > 0.5:
         top = [scored[0][1], scored[1][1]] if len(scored) > 1 else [scored[0][1]]
 
     return top
