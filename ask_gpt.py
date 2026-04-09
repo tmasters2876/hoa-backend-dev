@@ -72,13 +72,26 @@ QUERY_EXPANSIONS = {
     "shingles": "roof shingles alternative materials wind hail resistant",
     "roofing": "roof shingles alternative materials",
     "replace roof": "roof shingles alternative materials wind hail resistant",
+    "fence height": "fence height tall maximum minimum feet",
+    "how tall": "height tall maximum feet",
+    "rent my house": "rent rental lease homesite residential",
+    "rent my home": "rent rental lease homesite residential",
+    "can i rent": "rent rental lease homesite residential",
+    "fish": "fishing lake pond recreational access",
+    "fishing": "fishing lake pond recreational access",
 }
 
 def expand_query(question: str) -> str:
-    """Replace known acronyms with their full forms for better matching."""
+    """Replace known acronyms/phrases with their full forms for better matching."""
     q = question.lower()
-    for acronym, expansion in QUERY_EXPANSIONS.items():
-        q = re.sub(r'\b' + re.escape(acronym) + r'\b', expansion, q)
+    # Sort by length descending so multi-word phrases match before single words
+    sorted_expansions = sorted(
+        QUERY_EXPANSIONS.items(),
+        key=lambda x: len(x[0]),
+        reverse=True
+    )
+    for phrase, expansion in sorted_expansions:
+        q = q.replace(phrase, expansion)
     return q
 
 def _trim(text, max_chars):
