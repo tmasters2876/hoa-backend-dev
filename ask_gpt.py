@@ -157,14 +157,15 @@ def gpt_filter_clauses(question: str, clauses: list) -> list:
     filter_prompt = f"""Question: {question}
 
 Below are candidate clauses from HOA governing documents.
-Your job is to identify which clauses actually and specifically answer
-this question. Be strict — a clause about horses in fenced areas does NOT
-answer a question about fence placement. A clause about flag pole height
-does NOT answer a question about fence height.
+Identify which clauses are relevant to answering this question.
+Be inclusive — keep a clause if it contains ANY information that would
+help answer the question, even partially. Only exclude clauses that are
+completely unrelated to the topic.
 
-Return ONLY a JSON array of clause IDs that are genuinely relevant to the
-question, ordered from most to least relevant. If none are relevant,
-return an empty array []. Return ONLY the JSON array, no other text.
+Return ONLY a JSON array of clause IDs that are relevant, ordered from
+most to least relevant. Keep at least 3 clauses if possible.
+If truly none are relevant, return an empty array [].
+Return ONLY the JSON array, no other text.
 
 Candidate clauses:
 {clauses_text}"""
@@ -191,8 +192,8 @@ Candidate clauses:
         by_id = {(c.get("clause_id") or c.get("id")): c for c in clauses}
         filtered = [by_id[cid] for cid in relevant_ids if cid in by_id]
 
-        # If GPT filtered everything out, fall back to original list
-        if not filtered:
+        # If GPT filtered too aggressively, fall back to original list
+        if len(filtered) < 2:
             return clauses
 
         return filtered
