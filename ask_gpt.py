@@ -272,6 +272,7 @@ Final Answer:
 # Vector + Fallback Matching (with ranking)
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
+    original_question = question.lower()
     question = expand_query(question)
     tokens = _tokenize(question)
     keywords = extract_keywords(question)
@@ -371,7 +372,7 @@ def fetch_matching_clauses(question, tags=None, structure_type=None, concern_lev
         clause["clause_id"] = clause.get("clause_id") or clause.get("id")
 
     # 3) Fetch priority clauses for known query patterns
-    priority_matches = fetch_priority_clauses(question)
+    priority_matches = fetch_priority_clauses(original_question)
 
     # 4) Merge + score + dedupe
     scored = []
