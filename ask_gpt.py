@@ -78,6 +78,41 @@ def expand_query(question: str) -> str:
         q = re.sub(r'\b' + re.escape(acronym) + r'\b', expansion, q)
     return q
 
+def rewrite_query(question: str) -> str:
+    """Normalize a resident question into a clean search query using GPT."""
+    try:
+        response = client.chat.completions.create(
+            model=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o"),
+            messages=[
+                {"role": "system", "content": (
+                    "You are a search query optimizer for an HOA document system. "
+                    "Rewrite the user's question as a short, clear search phrase "
+                    "that captures the core topic. Remove conversational language. "
+                    "Examples:\n"
+                    "'how tall can my fence be' -> 'fence height maximum feet'\n"
+                    "'what is the maximum height I can build my fence' -> 'fence height maximum feet'\n"
+                    "'can I put up a fence' -> 'fence installation requirements'\n"
+                    "'what are the rules about my dog' -> 'pet rules restrictions'\n"
+                    "'can I rent my house' -> 'rental lease homesite restrictions'\n"
+                    "'what happens if I violate HOA rules' -> 'violation enforcement fines process'\n"
+                    "'can I have chickens' -> 'livestock animals poultry restrictions'\n"
+                    "'what are the setback requirements' -> 'building setback property line feet'\n"
+                    "Return only the rewritten query, nothing else. "
+                    "Keep it under 8 words."
+                )},
+                {"role": "user", "content": question}
+            ],
+            temperature=0.0,
+            max_tokens=30,
+        )
+        rewritten = response.choices[0].message.content.strip()
+        print(f"[query] '{question}' -> '{rewritten}'")
+        return rewritten
+    except Exception as e:
+        print(f"[query] WARNING: rewrite failed, using original: {e}")
+        return question
+
+
 def _trim(text, max_chars):
     if not text:
         return ""
@@ -202,6 +237,7 @@ Final Answer:
 # Vector + Fallback Matching (with ranking)
 # =========================
 def fetch_matching_clauses(question, tags=None, structure_type=None, concern_level=None):
+    question = rewrite_query(question)
     question = expand_query(question)
     tokens = _tokenize(question)
     keywords = extract_keywords(question)
