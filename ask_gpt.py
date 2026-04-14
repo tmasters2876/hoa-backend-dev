@@ -81,6 +81,7 @@ def retrieve_relevant_clauses(question, limit=6):
 
     # Special-case override for fence height intent to prioritize numeric fence rules.
     is_fence_height = "fence" in q and any(k in q for k in ["height", "tall", "high"])
+    fence_dim_terms = ["height", "feet", "foot", "ft", "inch", "inches", "maximum", "max", "not exceed"]
     scored = []
     for clause in all_clauses:
         searchable = " ".join([
@@ -93,21 +94,29 @@ def retrieve_relevant_clauses(question, limit=6):
 
         score = 0
 
+        # For fence-height intent, hard-filter to fence + dimensional clauses only.
+        if is_fence_height:
+            has_fence = "fence" in searchable
+            has_dimension = any(term in searchable for term in fence_dim_terms)
+            if not (has_fence and has_dimension):
+                continue
+
         # Base keyword overlap scoring.
         for token in q_tokens:
             if len(token) > 2 and token in searchable:
                 score += 2
 
-        # Strong override for fence height questions.
+        # Strong fence-height scoring for the filtered set only.
         if is_fence_height:
             if "fence" in searchable:
-                score += 30
+                score += 40
             if "height" in searchable:
-                score += 18
-            if "not exceed" in searchable or "maximum" in searchable:
                 score += 20
+            if "not exceed" in searchable or "maximum" in searchable or "max" in searchable:
+                score += 25
+            # Strongest boost for explicit dimensional values like "6 feet", "8 ft", "72 inches".
             if re.search(r"\b\d+\s*(feet|foot|ft|inches|inch|in)\b", searchable):
-                score += 35
+                score += 60
 
         if score > 0:
             scored.append((score, clause))
@@ -116,6 +125,9 @@ def retrieve_relevant_clauses(question, limit=6):
         return []
 
     scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
+    # Fence-height intent is intentionally narrow and deterministic: return at most 3.
+    if is_fence_height:
+        return [c for _, c in scored[:3]]
     return [c for _, c in scored[: min(max(limit, 4), 6)]]
 
 def format_clauses_for_display(clauses):
@@ -204,6 +216,7 @@ You are given a preselected set of relevant clauses from PLCA governing document
 INSTRUCTIONS:
 1. Read ALL provided clauses carefully to find ones that answer the question
 2. Apply the document hierarchy — higher authority governs when documents conflict
+2a. If clauses conflict, do NOT merge or average rules; state the single governing rule from the higher-authority document and explain why it controls
 3. Give a specific, direct answer grounded only in the clauses provided
 4. Reference the specific document and citation for each rule you cite
 5. If an amendment modifies an earlier rule, say what changed
