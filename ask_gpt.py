@@ -104,6 +104,23 @@ def retrieve_relevant_clauses(question, limit=6):
     # Strong intents stay narrow; sparse topics like paint/shed widen retrieval safely.
     if profile.get("topic") in ["paint", "shed"]:
         expanded_limit = max(limit, 20)
+    def intent_boost(clause, profile):
+        text = (
+            str(clause.get("plain_summary", "") or "") + " " +
+            str(clause.get("clause_text", "") or "")
+        ).lower()
+
+        boost = 0
+
+        if profile.get("topic") == "paint":
+            if any(term in text for term in ["paint", "repaint", "color", "colour", "exterior"]):
+                boost += 12
+
+        if profile.get("topic") == "shed":
+            if any(term in text for term in ["shed", "outbuilding", "out-build", "workshop", "barn", "stable"]):
+                boost += 12
+
+        return boost
 
     # Stage B: search eligibility remains full corpus via cached approved clauses.
     all_clauses = get_all_clauses()
@@ -172,7 +189,7 @@ def retrieve_relevant_clauses(question, limit=6):
             MIN_SCORE = 6
 
         if score >= MIN_SCORE:
-            scored.append((score, clause))
+            scored.append((score + intent_boost(clause, profile), clause))
 
     # Stage D: return a small evidence set for downstream prompting/display.
     # For architectural questions, rank by relevance score only so Builder Guidelines can surface naturally.
