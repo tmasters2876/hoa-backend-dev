@@ -73,139 +73,199 @@ def format_clauses_for_gpt(clauses):
         lines.append(f"[{cid}] {doc} | {citation} | {link}\n{summary}")
     return "\n\n".join(lines)
 
+TOPIC_PROFILES = {
+    "fence_height": {
+        "detect": lambda q: "fence" in q and any(k in q for k in ["tall", "height", "high", "maximum", "minimum", "how tall", "how high"]),
+        "required": ["fence"],
+        "required_any": ["height", "feet", "foot", "ft", "inch", "maximum", "minimum", "not exceed", "tall"],
+        "boost": ["height", "feet", "maximum", "minimum", "not exceed", "tall"],
+        "limit": 4,
+    },
+    "fence_general": {
+        "detect": lambda q: "fence" in q,
+        "required": ["fence"],
+        "required_any": None,
+        "boost": ["fence", "material", "placement", "barbed", "chain link", "wrought iron", "wood"],
+        "limit": 5,
+    },
+    "rental": {
+        "detect": lambda q: any(k in q for k in ["rent", "rental", "lease", "airbnb", "vrbo", "tenant", "short-term"]),
+        "required_any": ["rent", "lease", "rental", "tenant", "airbnb", "vrbo"],
+        "boost": ["rent", "lease", "single-family", "homesite", "prohibited", "allowed"],
+        "limit": 5,
+    },
+    "animals": {
+        "detect": lambda q: any(k in q for k in ["chicken", "dog", "cat", "pet", "animal", "livestock", "horse", "goat", "pig", "poultry", "fowl"]),
+        "required_any": ["animal", "pet", "chicken", "poultry", "livestock", "horse", "dog", "cat", "fowl"],
+        "boost": ["animal", "pet", "livestock", "chicken", "prohibited", "allowed", "limit"],
+        "limit": 5,
+    },
+    "solar": {
+        "detect": lambda q: any(k in q for k in ["solar", "panel", "photovoltaic"]),
+        "required_any": ["solar"],
+        "boost": ["solar", "panel", "roof", "arc", "approval", "installation"],
+        "limit": 5,
+    },
+    "flag_pole": {
+        "detect": lambda q: any(k in q for k in ["flag", "flagpole", "flag pole"]),
+        "required_any": ["flag"],
+        "boost": ["flag", "pole", "height", "feet", "arc", "approval"],
+        "limit": 5,
+    },
+    "parking": {
+        "detect": lambda q: any(k in q for k in ["park", "parking", "vehicle", "car", "truck", "rv", "boat", "trailer", "driveway"]),
+        "required_any": ["park", "vehicle", "driveway", "car", "truck", "rv", "boat", "trailer"],
+        "boost": ["park", "driveway", "street", "prohibited", "allowed", "overnight"],
+        "limit": 5,
+    },
+    "shed": {
+        "detect": lambda q: any(k in q for k in ["shed", "outbuilding", "workshop", "barn", "storage"]),
+        "required_any": ["shed", "outbuilding", "workshop", "barn", "storage", "out building"],
+        "boost": ["shed", "outbuilding", "approval", "arc", "size", "placement"],
+        "limit": 5,
+    },
+    "setbacks": {
+        "detect": lambda q: any(k in q for k in ["setback", "set back", "property line", "how close", "distance from"]),
+        "required_any": ["setback", "property line", "feet from", "distance", "front yard", "rear yard", "side yard"],
+        "boost": ["setback", "property line", "feet", "front", "rear", "side"],
+        "limit": 5,
+    },
+    "enforcement": {
+        "detect": lambda q: any(k in q for k in ["violat", "fine", "penalty", "enforcement", "letter", "209", "compliance", "notice"]),
+        "required_any": ["violat", "fine", "penalty", "enforcement", "compliance", "notice", "letter"],
+        "boost": ["fine", "violation", "enforcement", "notice", "letter", "cure", "hearing"],
+        "limit": 6,
+    },
+    "assessment": {
+        "detect": lambda q: any(k in q for k in ["assessment", "dues", "fee", "payment", "lien", "delinquent"]),
+        "required_any": ["assessment", "dues", "fee", "payment", "lien"],
+        "boost": ["assessment", "annual", "special", "lien", "delinquent", "pay"],
+        "limit": 5,
+    },
+    "arc_approval": {
+        "detect": lambda q: any(k in q for k in ["arc", "approval", "architectural review", "application", "submit", "approve"]),
+        "required_any": ["arc", "approval", "architectural review", "application", "submit", "approve"],
+        "boost": ["arc", "approval", "application", "submit", "written", "review"],
+        "limit": 6,
+    },
+    "paint": {
+        "detect": lambda q: any(k in q for k in ["paint", "color", "colour", "repaint", "exterior"]),
+        "required_any": ["paint", "color", "colour", "repaint", "exterior"],
+        "boost": ["paint", "color", "approval", "arc", "exterior"],
+        "limit": 5,
+    },
+    "guest_house": {
+        "detect": lambda q: any(k in q for k in ["guest house", "guest home", "casita", "second dwelling", "accessory"]),
+        "required_any": ["guest", "second dwelling", "accessory", "casita"],
+        "boost": ["guest house", "guest home", "second", "dwelling", "approval"],
+        "limit": 5,
+    },
+    "pools": {
+        "detect": lambda q: any(k in q for k in ["pool", "spa", "hot tub", "swimming"]),
+        "required_any": ["pool", "spa", "hot tub", "swimming"],
+        "boost": ["pool", "spa", "approval", "arc", "fence", "enclosure"],
+        "limit": 5,
+    },
+    "trees_landscaping": {
+        "detect": lambda q: any(k in q for k in ["tree", "landscape", "landscaping", "plant", "grass", "lawn", "shrub"]),
+        "required_any": ["tree", "landscape", "plant", "grass", "lawn", "shrub"],
+        "boost": ["tree", "removal", "approval", "arc", "landscape"],
+        "limit": 5,
+    },
+    "roofing": {
+        "detect": lambda q: any(k in q for k in ["roof", "shingle", "roofing", "replace roof"]),
+        "required_any": ["roof", "shingle"],
+        "boost": ["roof", "shingle", "approval", "arc", "material", "wind", "hail"],
+        "limit": 5,
+    },
+    "fishing_lake": {
+        "detect": lambda q: any(k in q for k in ["fish", "fishing", "lake", "pond", "dock", "boat", "swim"]),
+        "required_any": ["fish", "lake", "pond", "dock", "boat", "swim", "water"],
+        "boost": ["fish", "lake", "pond", "access", "recreational", "dock"],
+        "limit": 5,
+    },
+    "business": {
+        "detect": lambda q: any(k in q for k in ["business", "commercial", "work from home", "home office", "run a business"]),
+        "required_any": ["business", "commercial", "trade", "income", "work"],
+        "boost": ["business", "commercial", "prohibited", "zoning", "undetectable"],
+        "limit": 5,
+    },
+}
+
 def build_query_profile(question):
-    """Small question profiler to guide retrieval."""
-    q = (question or "").lower()
-
-    has_fence = "fence" in q
-    has_height = any(k in q for k in ["height", "tall", "high"])
-    has_paint = "paint" in q or "color" in q
-    has_shed = "shed" in q
-
-    if has_fence and has_height:
-        return {"topic": "fence", "rule_type": "height", "domain": "architectural", "answer_mode": "exact_rule"}
-
-    if has_fence:
-        return {"topic": "fence", "rule_type": "general", "domain": "architectural", "answer_mode": "general_rule"}
-
-    if has_paint:
-        return {"topic": "paint", "rule_type": "color", "domain": "architectural", "answer_mode": "exact_rule"}
-
-    if has_shed:
-        return {"topic": "shed", "rule_type": "general", "domain": "architectural", "answer_mode": "general_rule"}
-
-    return {"topic": None, "rule_type": None, "domain": "general", "answer_mode": "general_rule"}
+    q = question.lower()
+    for topic_key, profile in TOPIC_PROFILES.items():
+        if profile["detect"](q):
+            return topic_key, profile
+    return "general", None
 
 def retrieve_relevant_clauses(question, limit=6):
-    """Lightweight keyword retrieval over cached clauses; returns top relevant clauses only."""
-    # Stage A: build a compact query profile used by retrieval rules.
-    profile = build_query_profile(question)
-    expanded_limit = limit
-    # Strong intents stay narrow; sparse topics like paint/shed widen retrieval safely.
-    if profile.get("topic") in ["paint", "shed"]:
-        expanded_limit = max(limit, 20)
-    def intent_boost(clause, profile):
-        text = (
-            str(clause.get("plain_summary", "") or "") + " " +
-            str(clause.get("clause_text", "") or "")
-        ).lower()
-
-        boost = 0
-
-        if profile.get("topic") == "paint":
-            if any(term in text for term in ["paint", "repaint", "color", "colour", "exterior"]):
-                boost += 12
-
-        if profile.get("topic") == "shed":
-            if any(term in text for term in ["shed", "outbuilding", "out-build", "workshop", "barn", "stable"]):
-                boost += 12
-
-        return boost
-
-    # Stage B: search eligibility remains full corpus via cached approved clauses.
     all_clauses = get_all_clauses()
-    q = (question or "").lower()
-    q_tokens = set(re.findall(r"[a-z0-9]+", q))
-    is_approval_question = any(term in q for term in ["approval", "approve", "approved", "arc", "architectural review"])
-    is_architectural_question = profile.get("domain") == "architectural"
+    q = question.lower()
 
-    # Special-case override for fence height intent to prioritize numeric fence rules.
-    is_fence_height = profile.get("topic") == "fence" and profile.get("rule_type") == "height"
-    fence_dim_terms = ["height", "feet", "foot", "ft", "inch", "inches", "maximum", "max", "not exceed"]
+    topic_key, profile = build_query_profile(question)
+    print(f"[retrieval] Topic detected: {topic_key}")
 
-    # Stage C: score/rank candidate clauses from the corpus.
     scored = []
+
     for clause in all_clauses:
         searchable = " ".join([
             str(clause.get("document", "") or ""),
-            str(clause.get("citation", "") or ""),
-            str(clause.get("tags", "") or ""),
             str(clause.get("plain_summary", "") or ""),
             str(clause.get("clause_text", "") or ""),
+            str(clause.get("tags", "") or ""),
         ]).lower()
-        document_name = str(clause.get("document", "") or "").lower()
 
         score = 0
 
-        # For fence-height intent, hard-filter to fence + dimensional clauses only.
-        if is_fence_height:
-            has_fence = "fence" in searchable
-            has_dimension = any(term in searchable for term in fence_dim_terms)
-            if not (has_fence and has_dimension):
+        if profile is not None:
+            # Check required terms — clause must contain at least one
+            required_any = profile.get("required_any")
+            required = profile.get("required", [])
+
+            # Hard required: ALL of these must be present
+            if required:
+                if not all(r in searchable for r in required):
+                    continue
+
+            # Soft required: at least ONE of these must be present
+            if required_any:
+                if not any(r in searchable for r in required_any):
+                    continue
+
+            # Boost scoring for matching boost terms
+            boost_terms = profile.get("boost", [])
+            for term in boost_terms:
+                if term in searchable:
+                    score += 10
+
+            # Extra boost for dimensional values on height questions
+            if "height" in topic_key:
+                if re.search(r"\b\d+\s*(feet|foot|ft|inches|inch|in)\b", searchable):
+                    score += 40
+
+            # Minimum score threshold
+            if score < 5:
                 continue
 
-        # Base keyword overlap scoring.
-        for token in q_tokens:
-            if len(token) > 2 and token in searchable:
-                score += 2
-
-        # Modest architectural boost for Builder Guidelines when design standards are in scope.
-        if is_architectural_question and "builder" in document_name and "guideline" in document_name:
-            score += 8
-
-        # Boost approval-related clauses when the question is about approvals/ARC workflow.
-        if is_approval_question:
-            approval_terms = ["approval", "approve", "approved", "architectural review", "arc", "submit"]
-            approval_matches = sum(1 for term in approval_terms if term in searchable)
-            score += min(approval_matches * 4, 20)
-
-        # Strong fence-height scoring for the filtered set only.
-        if is_fence_height:
-            if "fence" in searchable:
-                score += 40
-            if "height" in searchable:
-                score += 20
-            if "not exceed" in searchable or "maximum" in searchable or "max" in searchable:
-                score += 25
-            # Strongest boost for explicit dimensional values like "6 feet", "8 ft", "72 inches".
-            if re.search(r"\b\d+\s*(feet|foot|ft|inches|inch|in)\b", searchable):
-                score += 60
-
-        if is_fence_height:
-            MIN_SCORE = 20
-        elif is_architectural_question:
-            MIN_SCORE = 10
         else:
-            MIN_SCORE = 6
+            # General fallback: simple keyword overlap
+            q_tokens = set(re.findall(r"[a-z0-9]+", q))
+            for token in q_tokens:
+                if len(token) > 2 and token in searchable:
+                    score += 2
+            if score < 6:
+                continue
 
-        if score >= MIN_SCORE:
-            scored.append((score + intent_boost(clause, profile), clause))
+        scored.append((score, clause))
 
-    # Stage D: return a small evidence set for downstream prompting/display.
-    # For architectural questions, rank by relevance score only so Builder Guidelines can surface naturally.
-    if is_architectural_question:
-        scored.sort(key=lambda x: -x[0])
-    else:
-        scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
+    # Sort by score descending, then by precedence
+    scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
 
-    if not scored:
-        return []
-
-    # Fence-height intent is intentionally narrow and deterministic: return at most 3.
-    if is_fence_height:
-        return [c for _, c in scored[:3]]
-
-    return [c for _, c in scored[:min(max(expanded_limit, 4), 20)]]
+    result_limit = profile.get("limit", limit) if profile else limit
+    result = [c for _, c in scored[:result_limit]]
+    print(f"[retrieval] Returning {len(result)} clauses for topic '{topic_key}'")
+    return result
 
 def format_clauses_for_display(clauses):
     """Format relevant clauses for display in the UI."""
