@@ -172,10 +172,15 @@ def retrieve_relevant_clauses(question, limit=6):
         scored.sort(key=lambda x: -x[0])
     else:
         scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
-    # Fence-height intent is intentionally narrow and deterministic: return at most 3.
-    if is_fence_height:
-        return [c for _, c in scored[:3]]
-    return [c for _, c in scored[: min(max(limit, 4), 6)]]
+
+    if not scored:
+        return []
+
+    top_score = scored[0][0]
+
+    filtered = [c for s, c in scored if s >= top_score * 0.6]
+
+    return filtered[:3]
 
 def format_clauses_for_display(clauses):
     """Format relevant clauses for display in the UI."""
