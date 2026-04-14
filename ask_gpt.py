@@ -105,6 +105,7 @@ def retrieve_relevant_clauses(question, limit=6):
     all_clauses = get_all_clauses()
     q = (question or "").lower()
     q_tokens = set(re.findall(r"[a-z0-9]+", q))
+    is_approval_question = any(term in q for term in ["approval", "approve", "approved", "arc", "architectural review"])
     is_architectural_question = profile.get("domain") == "architectural"
 
     # Special-case override for fence height intent to prioritize numeric fence rules.
@@ -141,6 +142,12 @@ def retrieve_relevant_clauses(question, limit=6):
         if is_architectural_question and "builder" in document_name and "guideline" in document_name:
             score += 8
 
+        # Boost approval-related clauses when the question is about approvals/ARC workflow.
+        if is_approval_question:
+            approval_terms = ["approval", "approve", "approved", "architectural review", "arc", "submit"]
+            approval_matches = sum(1 for term in approval_terms if term in searchable)
+            score += min(approval_matches * 4, 20)
+
         # Strong fence-height scoring for the filtered set only.
         if is_fence_height:
             if "fence" in searchable:
@@ -163,9 +170,6 @@ def retrieve_relevant_clauses(question, limit=6):
         if score >= MIN_SCORE:
             scored.append((score, clause))
 
-    if not scored:
-        return []
-
     # Stage D: return a small evidence set for downstream prompting/display.
     # For architectural questions, rank by relevance score only so Builder Guidelines can surface naturally.
     if is_architectural_question:
@@ -176,11 +180,11 @@ def retrieve_relevant_clauses(question, limit=6):
     if not scored:
         return []
 
-    top_score = scored[0][0]
+    # Fence-height intent is intentionally narrow and deterministic: return at most 3.
+    if is_fence_height:
+        return [c for _, c in scored[:3]]
 
-    filtered = [c for s, c in scored if s >= top_score * 0.6]
-
-    return filtered[:3]
+    return [c for _, c in scored[:min(max(limit, 4), 6)]]
 
 def format_clauses_for_display(clauses):
     """Format relevant clauses for display in the UI."""
