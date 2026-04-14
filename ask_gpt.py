@@ -57,7 +57,7 @@ def get_all_clauses():
     return all_clauses
 
 def format_clauses_for_gpt(clauses):
-    """Format all clauses compactly for GPT context."""
+    """Format selected clauses compactly for GPT context."""
     lines = []
     sorted_clauses = sorted(clauses, key=lambda c: int(c.get("precedence_level", 99)))
     for c in sorted_clauses:
@@ -65,9 +65,58 @@ def format_clauses_for_gpt(clauses):
         doc = c.get("document", "")
         citation = c.get("citation", "")
         link = c.get("link", "")
-        summary = c.get("plain_summary") or c.get("clause_text", "")[:300]
+        # Keep prompt payload small: prefer summary, and only fall back to trimmed clause text.
+        summary = (c.get("plain_summary") or "").strip()
+        if not summary:
+            summary = (c.get("clause_text", "") or "").strip()[:500]
+        summary = summary[:500]
         lines.append(f"[{cid}] {doc} | {citation} | {link}\n{summary}")
     return "\n\n".join(lines)
+
+def retrieve_relevant_clauses(question, limit=6):
+    """Lightweight keyword retrieval over cached clauses; returns top relevant clauses only."""
+    all_clauses = get_all_clauses()
+    q = (question or "").lower()
+    q_tokens = set(re.findall(r"[a-z0-9]+", q))
+
+    # Special-case override for fence height intent to prioritize numeric fence rules.
+    is_fence_height = "fence" in q and any(k in q for k in ["height", "tall", "high"])
+    scored = []
+    for clause in all_clauses:
+        searchable = " ".join([
+            str(clause.get("document", "") or ""),
+            str(clause.get("citation", "") or ""),
+            str(clause.get("tags", "") or ""),
+            str(clause.get("plain_summary", "") or ""),
+            str(clause.get("clause_text", "") or ""),
+        ]).lower()
+
+        score = 0
+
+        # Base keyword overlap scoring.
+        for token in q_tokens:
+            if len(token) > 2 and token in searchable:
+                score += 2
+
+        # Strong override for fence height questions.
+        if is_fence_height:
+            if "fence" in searchable:
+                score += 30
+            if "height" in searchable:
+                score += 18
+            if "not exceed" in searchable or "maximum" in searchable:
+                score += 20
+            if re.search(r"\b\d+\s*(feet|foot|ft|inches|inch|in)\b", searchable):
+                score += 35
+
+        if score > 0:
+            scored.append((score, clause))
+
+    if not scored:
+        return []
+
+    scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
+    return [c for _, c in scored[: min(max(limit, 4), 6)]]
 
 def format_clauses_for_display(clauses):
     """Format relevant clauses for display in the UI."""
@@ -126,13 +175,29 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
     if whimsy_reply:
         return whimsy_reply
 
-    # Get all clauses
-    all_clauses = get_all_clauses()
-    clauses_text = format_clauses_for_gpt(all_clauses)
+    # Retrieve only the most relevant clauses (prevents token overflow and noisy context).
+    selected_clauses = retrieve_relevant_clauses(question, limit=6)
+    if not selected_clauses:
+        no_match_answer = (
+            "I could not find a specific governing clause that directly answers this question. "
+            "Please contact the ARC or the HOA board for clarification. "
+            "If you have any other questions, feel free to ask!"
+        )
+        if output_format == "json":
+            return {
+                "question": question,
+                "answer": no_match_answer,
+                "clauses": [],
+                "mode": mode,
+                "format": "json"
+            }
+        return no_match_answer
+
+    clauses_text = format_clauses_for_gpt(selected_clauses)
 
     system_prompt = f"""You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), located in Waller and Grimes Counties, Texas.
 
-You have access to ALL governing documents for PLCA. Your job is to find the answer to the resident's question by reading through the provided clauses.
+You are given a preselected set of relevant clauses from PLCA governing documents. Your job is to find the answer to the resident's question by reading through the provided clauses.
 
 {DOCUMENT_HIERARCHY}
 
@@ -152,7 +217,7 @@ Use HTML links for citations: <a href="LINK" target="_blank">CITATION</a>"""
 
     user_prompt = f"""Resident Question: {question}
 
-ALL GOVERNING DOCUMENT CLAUSES:
+PRESELECTED RELEVANT CLAUSES:
 {clauses_text}
 
 Please answer the resident's question based on the clauses above."""
@@ -169,11 +234,8 @@ Please answer the resident's question based on the clauses above."""
     final_answer = response.choices[0].message.content
     final_answer = re.sub(r"\[(.*?)\] \((.*?)\)", r"\1 \2", final_answer)
 
-    # For display, find clauses GPT mentioned by looking for clause IDs in the answer
-    cited_ids = re.findall(r'\b([A-Z][A-Z0-9_\-]{3,})\b', final_answer)
-    cited_clauses = [c for c in all_clauses if c.get("clause_id") in cited_ids]
-    if not cited_clauses:
-        cited_clauses = sorted(all_clauses, key=lambda c: int(c.get("precedence_level", 99)))[:3]
+    # Display the same retrieved evidence that was sent to GPT (no regex-based post-parsing).
+    cited_clauses = selected_clauses[:3]
 
     display_text = format_clauses_for_display(cited_clauses)
 
