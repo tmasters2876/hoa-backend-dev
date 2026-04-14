@@ -78,6 +78,9 @@ def retrieve_relevant_clauses(question, limit=6):
     all_clauses = get_all_clauses()
     q = (question or "").lower()
     q_tokens = set(re.findall(r"[a-z0-9]+", q))
+    # Architectural/design intent flag used for authority-sensitive ranking behavior.
+    architectural_terms = ["fence", "shed", "pergola", "patio", "paint", "color", "roof", "exterior", "arc", "architectural"]
+    is_architectural_question = any(term in q for term in architectural_terms)
 
     # Special-case override for fence height intent to prioritize numeric fence rules.
     is_fence_height = "fence" in q and any(k in q for k in ["height", "tall", "high"])
@@ -91,6 +94,7 @@ def retrieve_relevant_clauses(question, limit=6):
             str(clause.get("plain_summary", "") or ""),
             str(clause.get("clause_text", "") or ""),
         ]).lower()
+        document_name = str(clause.get("document", "") or "").lower()
 
         score = 0
 
@@ -105,6 +109,10 @@ def retrieve_relevant_clauses(question, limit=6):
         for token in q_tokens:
             if len(token) > 2 and token in searchable:
                 score += 2
+
+        # Modest architectural boost for Builder Guidelines when design standards are in scope.
+        if is_architectural_question and "builder" in document_name and "guideline" in document_name:
+            score += 8
 
         # Strong fence-height scoring for the filtered set only.
         if is_fence_height:
@@ -124,7 +132,11 @@ def retrieve_relevant_clauses(question, limit=6):
     if not scored:
         return []
 
-    scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
+    # For architectural questions, rank by relevance score only so Builder Guidelines can surface naturally.
+    if is_architectural_question:
+        scored.sort(key=lambda x: -x[0])
+    else:
+        scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
     # Fence-height intent is intentionally narrow and deterministic: return at most 3.
     if is_fence_height:
         return [c for _, c in scored[:3]]
@@ -217,6 +229,7 @@ INSTRUCTIONS:
 1. Read ALL provided clauses carefully to find ones that answer the question
 2. Apply the document hierarchy — higher authority governs when documents conflict
 2a. If clauses conflict, do NOT merge or average rules; state the single governing rule from the higher-authority document and explain why it controls
+2b. For architectural/design standards (for example fences, exterior colors, sheds, placement/details), Builder Guidelines may control when they provide the specific requirement; do not automatically override them due to general hierarchy rank, and explain why the controlling document governs this architectural issue
 3. Give a specific, direct answer grounded only in the clauses provided
 4. Reference the specific document and citation for each rule you cite
 5. If an amendment modifies an earlier rule, say what changed
