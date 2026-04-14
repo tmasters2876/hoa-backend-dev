@@ -1,36 +1,11 @@
 import os
 import re
+import json
 import random
 from dotenv import load_dotenv
 from supabase import create_client
 from openai import OpenAI
 
-# =========================
-# Config
-# =========================
-RETRIEVAL_COUNT = 30          # How many candidates to retrieve before GPT analysis
-INCLUDE_FULL_TEXT_TOP_N = 3   # How many clauses to show full text for in output
-INCLUDE_FULL_TEXT_MAX_CHARS = 1500
-
-DOCUMENT_HIERARCHY = """
-GOVERNING DOCUMENT HIERARCHY (highest to lowest authority):
-1. Texas Property Code — State law. Supersedes all HOA documents.
-2. Declaration of Covenants, Conditions & Restrictions (CCRs) — Foundational covenant.
-3. Amendments to CCRs — Modify the CCRs. Later amendments supersede earlier ones.
-4. Articles of Incorporation — Creates the legal entity.
-5. Bylaws — Internal governance of the Association.
-6. Board Resolutions & Clarifying Resolutions — Procedural rules and interpretations.
-7. Specific Regulations (Solar, Flags, Rain Barrels, etc.) — Additive gap-filling rules.
-8. 2022 Builders Guidelines — Most specific, least authoritative.
-
-When documents conflict, the higher authority always governs.
-When an Amendment contradicts the original CCR, the Amendment governs.
-Texas Property Code sets minimum rights that HOA rules cannot reduce.
-"""
-
-# =========================
-# Load environment
-# =========================
 load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -39,9 +14,90 @@ supabase = create_client(
     os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 )
 
-# =========================
-# Instant whimsy
-# =========================
+DOCUMENT_HIERARCHY = """
+Document authority order (highest to lowest):
+1. Texas Property Code
+2. CCRs & Declarations
+3. CCR Amendments
+4. Articles of Incorporation
+5. Bylaws
+6. Board Resolutions & Clarifying Resolutions
+7. Specific Regulations (Solar, Flags, Rain Barrels, etc.)
+8. 2022 Builders Guidelines
+"""
+
+# Cache all clauses in memory after first load
+_clause_cache = None
+
+def get_all_clauses():
+    global _clause_cache
+    if _clause_cache is not None:
+        return _clause_cache
+
+    all_clauses = []
+    page_size = 1000
+    offset = 0
+    while True:
+        result = (
+            supabase
+            .from_("clauses")
+            .select("clause_id,document,page,citation,clause_text,plain_summary,link,precedence_level,tags")
+            .eq("status", "approved")
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        batch = result.data or []
+        all_clauses.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+
+    _clause_cache = all_clauses
+    print(f"[cache] Loaded {len(all_clauses)} approved clauses")
+    return all_clauses
+
+def format_clauses_for_gpt(clauses):
+    """Format all clauses compactly for GPT context."""
+    lines = []
+    sorted_clauses = sorted(clauses, key=lambda c: int(c.get("precedence_level", 99)))
+    for c in sorted_clauses:
+        cid = c.get("clause_id", "")
+        doc = c.get("document", "")
+        citation = c.get("citation", "")
+        link = c.get("link", "")
+        summary = c.get("plain_summary") or c.get("clause_text", "")[:300]
+        lines.append(f"[{cid}] {doc} | {citation} | {link}\n{summary}")
+    return "\n\n".join(lines)
+
+def format_clauses_for_display(clauses):
+    """Format relevant clauses for display in the UI."""
+    formatted = []
+    for idx, c in enumerate(clauses, 1):
+        citation = c.get("citation", f"Clause {idx}")
+        link = c.get("link", "")
+        summary = c.get("plain_summary", "No summary provided.")
+        document = c.get("document", "Unknown")
+        clause_text = c.get("clause_text", "")
+
+        if citation and link:
+            link_html = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{citation}</a>'
+        else:
+            link_html = citation
+
+        entry = (
+            f"<b>{idx}. <strong>Summary</strong>: According to {link_html}, {summary}.</b><br>"
+            f"<strong>Match Source</strong>: Governing Documents • "
+            f"<code>{document}</code><br>"
+        )
+        if clause_text and idx <= 2:
+            trimmed = clause_text[:1500] + "…" if len(clause_text) > 1500 else clause_text
+            entry += (
+                f"<details><summary>View Full Clause Text</summary>"
+                f"<pre>{trimmed}</pre></details>"
+            )
+        formatted.append(entry)
+    return "<br><br>".join(formatted)
+
 def check_instant_whimsy(question_lower):
     creator_keywords = [
         "creator", "developer", "who made you", "who built you",
@@ -65,307 +121,69 @@ def check_instant_whimsy(question_lower):
         ])
     return None
 
-# =========================
-# Helpers
-# =========================
-STOPWORDS = {
-    "the","a","an","and","or","of","to","in","on","for","with","by","is","are","was","were",
-    "be","can","i","my","our","your","their","as","it","that","this","do","does","did","from",
-    "at","we","you","they","have","has","had","me","us","them","am","will","shall","may",
-    "should","would","could","not","no","yes","if","but","so","than","then","who","what",
-    "when","where","why","how"
-}
-
-QUERY_EXPANSIONS = {
-    "ac": "air conditioning",
-    "a/c": "air conditioning",
-    "rv": "recreational vehicle",
-    "hoa": "homeowners association",
-    "arc": "architectural review committee",
-    "ccr": "covenants conditions restrictions",
-    "dcc": "covenants conditions restrictions",
-    "ev": "electric vehicle",
-    "sq ft": "square footage",
-    "shingles": "roof shingles alternative materials wind hail resistant",
-    "roofing": "roof shingles alternative materials",
-    "replace roof": "roof shingles alternative materials wind hail resistant",
-}
-
-def expand_query(question: str) -> str:
-    q = question.lower()
-    sorted_expansions = sorted(QUERY_EXPANSIONS.items(), key=lambda x: len(x[0]), reverse=True)
-    for phrase, expansion in sorted_expansions:
-        q = q.replace(phrase, expansion)
-    return q
-
-def _trim(text, max_chars):
-    if not text:
-        return ""
-    text = text.strip()
-    return text if len(text) <= max_chars else (text[:max_chars] + "…")
-
-def _tokenize(query: str):
-    return [t for t in re.findall(r"[a-zA-Z0-9\-]+", (query or "").lower()) if len(t) > 2]
-
-def extract_keywords(question: str):
-    words = _tokenize(question)
-    return [w for w in words if w not in STOPWORDS]
-
-# =========================
-# Stage 1: Broad Retrieval
-# =========================
-def fetch_candidate_clauses(question: str) -> list:
-    """
-    Retrieve a broad set of candidate clauses using both vector search
-    and keyword search. Does not score or filter — just gets candidates.
-    """
-    expanded = expand_query(question)
-    keywords = extract_keywords(expanded)
-    seen = set()
-    candidates = []
-
-    def add_clauses(clauses, source):
-        for c in clauses:
-            cid = c.get("clause_id") or c.get("id")
-            if cid and cid not in seen:
-                seen.add(cid)
-                c["match_source"] = source
-                c["clause_id"] = cid
-                candidates.append(c)
-
-    # 1) Vector search — semantic similarity
-    try:
-        embedding_response = client.embeddings.create(
-            model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-ada-002"),
-            input=expanded,
-        )
-        query_embedding = embedding_response.data[0].embedding
-        vector_result = supabase.rpc("match_clauses", {
-            "query_embedding": query_embedding,
-            "match_threshold": 0.5,
-            "match_count": RETRIEVAL_COUNT,
-        }).execute()
-        vector_clauses = [r for r in (vector_result.data or []) if r.get("status") == "approved"]
-        add_clauses(vector_clauses, "Vector Match")
-        print(f"[retrieval] Vector search returned {len(vector_clauses)} clauses")
-    except Exception as e:
-        print(f"[retrieval] WARNING: vector search failed: {e}")
-
-    # 2) Keyword search — literal text matching across plain_summary and clause_text
-    if keywords:
-        try:
-            parts = []
-            for k in set(keywords):
-                parts.append(f"plain_summary.ilike.%{k}%")
-                parts.append(f"clause_text.ilike.%{k}%")
-            or_filter = ",".join(parts)
-            keyword_result = (
-                supabase
-                .from_("clauses")
-                .select("*")
-                .eq("status", "approved")
-                .or_(or_filter)
-                .limit(RETRIEVAL_COUNT)
-                .execute()
-            )
-            keyword_clauses = keyword_result.data or []
-            add_clauses(keyword_clauses, "Keyword Match")
-            print(f"[retrieval] Keyword search returned {len(keyword_clauses)} new clauses")
-        except Exception as e:
-            print(f"[retrieval] WARNING: keyword search failed: {e}")
-
-    # 3) Also search original (non-expanded) question keywords
-    original_keywords = extract_keywords(question.lower())
-    new_keywords = set(original_keywords) - set(keywords)
-    if new_keywords:
-        try:
-            parts = []
-            for k in new_keywords:
-                parts.append(f"plain_summary.ilike.%{k}%")
-                parts.append(f"clause_text.ilike.%{k}%")
-            or_filter = ",".join(parts)
-            orig_result = (
-                supabase
-                .from_("clauses")
-                .select("*")
-                .eq("status", "approved")
-                .or_(or_filter)
-                .limit(15)
-                .execute()
-            )
-            add_clauses(orig_result.data or [], "Keyword Match")
-        except Exception as e:
-            print(f"[retrieval] WARNING: original keyword search failed: {e}")
-
-    print(f"[retrieval] Total unique candidates: {len(candidates)}")
-    return candidates
-
-
-# =========================
-# Format Clauses for Display
-# =========================
-def format_clauses_for_prompt(clauses):
-    # Sort by precedence (lower = higher authority)
-    sorted_clauses = sorted(clauses, key=lambda c: int(c.get("precedence_level", 99)))
-
-    formatted = []
-    for idx, c in enumerate(sorted_clauses, 1):
-        citation = c.get("citation", f"Clause {idx}")
-        link = c.get("link", "")
-        summary = c.get("plain_summary", "No summary provided.")
-        source = c.get("match_source", "Unknown")
-        document = c.get("document", "Unknown")
-
-        clause_text_full = c.get("clause_text") or ""
-        clause_text_to_show = ""
-        if clause_text_full and idx <= INCLUDE_FULL_TEXT_TOP_N:
-            clause_text_to_show = _trim(clause_text_full, INCLUDE_FULL_TEXT_MAX_CHARS)
-
-        if citation and link:
-            link_html = f'<a href="{link}" target="_blank" rel="noopener noreferrer">{citation}</a>'
-        else:
-            link_html = citation
-
-        entry = (
-            f"<b>{idx}. <strong>Summary</strong>: According to {link_html}, {summary}.</b><br>"
-            f"<strong>Match Source</strong>: {source} • "
-            f"<code>{document}</code><br>"
-        )
-
-        if clause_text_to_show:
-            entry += (
-                f"<details><summary>View Full Clause Text</summary>"
-                f"<pre>{clause_text_to_show}</pre></details>"
-            )
-
-        formatted.append(entry)
-
-    return "<br><br>".join(formatted)
-
-
-# =========================
-# Stage 3: Build Final Answer
-# =========================
-def build_gpt_prompt(question, clause_text, no_matches=False):
-    if no_matches:
-        fallback_msg = (
-            "Note: No clauses directly matched this question. "
-            "The clauses below are the closest general rules that may apply.<br><br>"
-        )
-    else:
-        fallback_msg = ""
-
-    return f"""Resident Question:
-{question}
-
-{fallback_msg}
-{DOCUMENT_HIERARCHY}
-
-Relevant Clauses (already filtered and ordered by relevance and authority):
-{clause_text}
-
-Guidelines:
-1. Answer the question directly and specifically. Do not be vague.
-2. Reference the specific document name and citation for each rule you cite.
-3. When documents conflict, apply the hierarchy above — state which document governs.
-4. When a Texas Property Code clause applies, note it sets the legal minimum floor.
-5. Clearly state whether the activity is allowed, prohibited, requires approval, or is unclear.
-6. If an amendment modifies an earlier rule, explain what changed.
-7. Never fabricate rules or cite documents not in the clauses above.
-8. Never provide legal advice — recommend a licensed attorney for legal questions.
-9. For ARC or board approval decisions, recommend the resident contact them directly.
-10. Use HTML for citations: <a href="link" target="_blank">Citation Text</a>
-11. Close with: "If you have any other questions, feel free to ask!"
----
-
-Final Answer:
-"""
-
-
-# =========================
-# Soft fallback
-# =========================
-def fetch_soft_fallback_clauses():
-    general_tags = ["rental", "lease", "shed", "driveway", "fence", "guest house", "park", "parking", "tenant"]
-    query = supabase.from_("clauses").select("*").eq("status", "approved").contains("tags", general_tags).limit(5)
-    result = query.execute()
-    fallback_data = result.data or []
-    for clause in fallback_data:
-        clause["match_source"] = "General Soft Fallback"
-        clause["clause_id"] = clause.get("clause_id") or clause.get("id")
-
-    if not fallback_data:
-        fallback_data = [{
-            "precedence_level": "9",
-            "plain_summary": "Please check your HOA documents or ARC for specific rules on this topic.",
-            "citation": "General Guideline",
-            "link": "",
-            "document": "Default Fallback",
-            "match_source": "Injected Fallback",
-            "clause_id": "FALLBACK_GENERAL",
-            "clause_text": ""
-        }]
-    return fallback_data
-
-
-# =========================
-# MAIN
-# =========================
 def answer_question(question, tags=None, mode="default", structure_type=None, concern_level=None, output_format="markdown"):
     whimsy_reply = check_instant_whimsy(question.lower().strip())
     if whimsy_reply:
         return whimsy_reply
 
-    # Stage 1: Broad retrieval
-    candidates = fetch_candidate_clauses(question)
+    # Get all clauses
+    all_clauses = get_all_clauses()
+    clauses_text = format_clauses_for_gpt(all_clauses)
 
-    # Fall back to soft fallback if nothing found
-    no_matches = False
-    if not candidates:
-        candidates = fetch_soft_fallback_clauses()
-        no_matches = True
+    system_prompt = f"""You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), located in Waller and Grimes Counties, Texas.
 
-    # Stage 2: GPT answers directly from all candidates
-    # Sort by precedence so highest authority appears first
-    sorted_candidates = sorted(
-        candidates,
-        key=lambda c: int(c.get("precedence_level", 99))
-    )
+You have access to ALL governing documents for PLCA. Your job is to find the answer to the resident's question by reading through the provided clauses.
 
-    clause_text = format_clauses_for_prompt(sorted_candidates)
-    prompt = build_gpt_prompt(question, clause_text, no_matches)
+{DOCUMENT_HIERARCHY}
 
-    gpt_response = client.chat.completions.create(
+INSTRUCTIONS:
+1. Read ALL provided clauses carefully to find ones that answer the question
+2. Apply the document hierarchy — higher authority governs when documents conflict
+3. Give a specific, direct answer grounded only in the clauses provided
+4. Reference the specific document and citation for each rule you cite
+5. If an amendment modifies an earlier rule, say what changed
+6. State clearly whether something is allowed, prohibited, or requires ARC approval
+7. If no clause addresses the question, say so plainly and recommend contacting the ARC
+8. Never fabricate rules not present in the clauses
+9. Never provide legal advice
+10. Close with: "If you have any other questions, feel free to ask!"
+
+Use HTML links for citations: <a href="LINK" target="_blank">CITATION</a>"""
+
+    user_prompt = f"""Resident Question: {question}
+
+ALL GOVERNING DOCUMENT CLAUSES:
+{clauses_text}
+
+Please answer the resident's question based on the clauses above."""
+
+    response = client.chat.completions.create(
         model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"),
         messages=[
-            {"role": "system", "content": (
-                "You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), "
-                "located in Waller and Grimes Counties, Texas. "
-                "You help residents understand their HOA governing documents in plain English. "
-                "You will be given a set of candidate clauses retrieved from the governing documents. "
-                "Many of these clauses may not be relevant to the question — ignore them. "
-                "Focus only on clauses that directly answer the resident's question. "
-                "Apply the document hierarchy: Texas Property Code > CCRs > Amendments > Bylaws > Resolutions > Builders Guidelines. "
-                "When documents conflict, the higher authority governs. "
-                "Give specific, direct answers. Never fabricate rules. "
-                "Never provide legal advice. "
-                "Recommend contacting the ARC or board for approval decisions."
-            )},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ],
         temperature=0.2,
     )
 
-    final_answer = gpt_response.choices[0].message.content
+    final_answer = response.choices[0].message.content
     final_answer = re.sub(r"\[(.*?)\] \((.*?)\)", r"\1 \2", final_answer)
+
+    # For display, find clauses GPT mentioned by looking for clause IDs in the answer
+    cited_ids = re.findall(r'\b([A-Z][A-Z0-9_\-]{3,})\b', final_answer)
+    cited_clauses = [c for c in all_clauses if c.get("clause_id") in cited_ids]
+    if not cited_clauses:
+        cited_clauses = sorted(all_clauses, key=lambda c: int(c.get("precedence_level", 99)))[:3]
+
+    display_text = format_clauses_for_display(cited_clauses)
 
     if output_format == "json":
         return {
             "question": question,
             "answer": final_answer,
-            "clauses": sorted_candidates,
+            "clauses": cited_clauses,
             "mode": mode,
             "format": "json"
         }
 
-    return f"{final_answer}<br><br>{clause_text}"
+    return f"{final_answer}<br><br>{display_text}"
