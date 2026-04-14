@@ -100,6 +100,10 @@ def retrieve_relevant_clauses(question, limit=6):
     """Lightweight keyword retrieval over cached clauses; returns top relevant clauses only."""
     # Stage A: build a compact query profile used by retrieval rules.
     profile = build_query_profile(question)
+    expanded_limit = limit
+    # Strong intents stay narrow; sparse topics like paint/shed widen retrieval safely.
+    if profile.get("topic") in ["paint", "shed"]:
+        expanded_limit = max(limit, 20)
 
     # Stage B: search eligibility remains full corpus via cached approved clauses.
     all_clauses = get_all_clauses()
@@ -184,7 +188,7 @@ def retrieve_relevant_clauses(question, limit=6):
     if is_fence_height:
         return [c for _, c in scored[:3]]
 
-    return [c for _, c in scored[:min(max(limit, 4), 6)]]
+    return [c for _, c in scored[:min(max(expanded_limit, 4), 20)]]
 
 def format_clauses_for_display(clauses):
     """Format relevant clauses for display in the UI."""
