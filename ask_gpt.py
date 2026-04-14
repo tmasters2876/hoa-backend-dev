@@ -43,17 +43,47 @@ def get_all_clauses():
 def format_all_clauses_for_gpt(clauses):
     lines = []
     sorted_clauses = sorted(clauses, key=lambda c: int(c.get("precedence_level", 99)))
+
+    # Short document name map to save tokens
+    DOC_SHORT = {
+        "Declaration_of_Covenants,_Conditions,_&_Restrictions_-_09-17-2004.pdf": "CCR",
+        "First_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_10-05-2004.pdf": "CCR-Amend1",
+        "1Second_Amendment_to_the_Declaration_of_Covenants,_Conditions_and_Restrictions_11-08-2005.pdf": "CCR-Amend2",
+        "Supplemental_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_Sec_2_-_(Waller_Cty_10-4-2004).pdf": "CCR-Supp2",
+        "Supplemental_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_Sec_3_(Grimes_Cty_-_11-16-2004).pdf": "CCR-Supp3",
+        "Supplemental_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_Sec_4_-_11-02-2005.pdf": "CCR-Supp4",
+        "Amendment_to_DCC&R_-_11.04.19.pdf": "CCR-Amend2019",
+        "ByLaws_-_PLCA_-_10-19-2004.pdf": "Bylaws",
+        "Articles_of_Incorporation_-_Waller_-_3-26-18.pdf": "Articles-Waller",
+        "PLCA_-_Articles_of_Incorporation_-_Grimes_-_3-26-18.pdf": "Articles-Grimes",
+        "Resolution_Adopting_Covenants,_Conditions_&_Restrictions_Enforcement_Process_(Recorded_Waller_Co_-_02-09-17.pdf": "Enforce-Waller",
+        "Resolution_Adopting_Conditions,_Conditions_&_Restrictions_Enforcement_Process_-_(Grimes_Cty_02-27-2017).pdf": "Enforce-Grimes",
+        "Recorded_Adopting_Governing_Documents_Enforcement_Process_and_Fine_Policies_(Grimes)_Fixed.pdf": "Enforce2-Grimes",
+        "2022_Recorded_Adopting_Governing_Documents_Enforcement_Process_and_Fine_Policies_(Waller).pdf": "Enforce2-Waller",
+        "Resolution_Clarifying_Articles_7_and_8_of_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_(Grimes_Cty_05-01-2017).pdf": "Clarify-Grimes",
+        "Resolution_Clarfying_Articles_7_and_8_of_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_(Waller_Cty_04-26-2017).pdf": "Clarify-Waller",
+        "Resolution_Regarding_Assessment_of_Fines_for_Violations_of_Restrictive_Covenants_and-or_Rules_&_Regulations__-_(Waller_01-23-2012_&_Grimes_02-22-2012).pdf": "Fines",
+        "Regulation_of_Solar_Panels,_Roof_Shingles,_Flag,_Flag_Poles,_Religious_Items_and_Rain_Barrels_-_(Waller_01-23-2012_&_Grimes_02-22-2012).pdf": "Regs",
+        "Recorded_Resolution_Window_Coverings_Waller-Fixed.pdf": "WindowCoverings",
+        "2022 Builders Guidelines & Application": "BG2022",
+        "Texas Property Code Chapter 202": "TXC202",
+        "Texas Property Code Chapter 207": "TXC207",
+        "Texas Property Code Chapter 209": "TXC209",
+        "Texas Property Code Chapter 5": "TXC5",
+    }
+
     for c in sorted_clauses:
         cid = c.get("clause_id", "")
         doc = c.get("document", "")
+        doc_short = DOC_SHORT.get(doc, doc[:20])
         citation = c.get("citation", "")
         link = c.get("link", "")
         summary = (c.get("plain_summary") or "").strip()
         if not summary:
-            summary = (c.get("clause_text") or "").strip()[:150]
+            summary = (c.get("clause_text") or "").strip()[:100]
         else:
-            summary = summary[:150]
-        lines.append(f"[{cid}] {doc} | {citation} | {link}\n{summary}")
+            summary = summary[:100]
+        lines.append(f"[{cid}|{doc_short}|{citation}|{link}]\n{summary}")
     return "\n\n".join(lines)
 
 def format_clauses_for_display(clauses):
