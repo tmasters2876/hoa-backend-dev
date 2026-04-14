@@ -159,7 +159,6 @@ def fetch_candidate_clauses(question: str) -> list:
             for k in set(keywords):
                 parts.append(f"plain_summary.ilike.%{k}%")
                 parts.append(f"clause_text.ilike.%{k}%")
-                parts.append(f"tags.ilike.%{k}%")
             or_filter = ",".join(parts)
             keyword_result = (
                 supabase
