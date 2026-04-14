@@ -73,18 +73,45 @@ def format_clauses_for_gpt(clauses):
         lines.append(f"[{cid}] {doc} | {citation} | {link}\n{summary}")
     return "\n\n".join(lines)
 
+def build_query_profile(question):
+    """Small question profiler to guide retrieval."""
+    q = (question or "").lower()
+
+    has_fence = "fence" in q
+    has_height = any(k in q for k in ["height", "tall", "high"])
+    has_paint = "paint" in q or "color" in q
+    has_shed = "shed" in q
+
+    if has_fence and has_height:
+        return {"topic": "fence", "rule_type": "height", "domain": "architectural", "answer_mode": "exact_rule"}
+
+    if has_fence:
+        return {"topic": "fence", "rule_type": "general", "domain": "architectural", "answer_mode": "general_rule"}
+
+    if has_paint:
+        return {"topic": "paint", "rule_type": "color", "domain": "architectural", "answer_mode": "exact_rule"}
+
+    if has_shed:
+        return {"topic": "shed", "rule_type": "general", "domain": "architectural", "answer_mode": "general_rule"}
+
+    return {"topic": None, "rule_type": None, "domain": "general", "answer_mode": "general_rule"}
+
 def retrieve_relevant_clauses(question, limit=6):
     """Lightweight keyword retrieval over cached clauses; returns top relevant clauses only."""
+    # Stage A: build a compact query profile used by retrieval rules.
+    profile = build_query_profile(question)
+
+    # Stage B: search eligibility remains full corpus via cached approved clauses.
     all_clauses = get_all_clauses()
     q = (question or "").lower()
     q_tokens = set(re.findall(r"[a-z0-9]+", q))
-    # Architectural/design intent flag used for authority-sensitive ranking behavior.
-    architectural_terms = ["fence", "shed", "pergola", "patio", "paint", "color", "roof", "exterior", "arc", "architectural"]
-    is_architectural_question = any(term in q for term in architectural_terms)
+    is_architectural_question = profile.get("domain") == "architectural"
 
     # Special-case override for fence height intent to prioritize numeric fence rules.
-    is_fence_height = "fence" in q and any(k in q for k in ["height", "tall", "high"])
+    is_fence_height = profile.get("topic") == "fence" and profile.get("rule_type") == "height"
     fence_dim_terms = ["height", "feet", "foot", "ft", "inch", "inches", "maximum", "max", "not exceed"]
+
+    # Stage C: score/rank candidate clauses from the corpus.
     scored = []
     for clause in all_clauses:
         searchable = " ".join([
@@ -132,6 +159,7 @@ def retrieve_relevant_clauses(question, limit=6):
     if not scored:
         return []
 
+    # Stage D: return a small evidence set for downstream prompting/display.
     # For architectural questions, rank by relevance score only so Builder Guidelines can surface naturally.
     if is_architectural_question:
         scored.sort(key=lambda x: -x[0])
@@ -217,6 +245,7 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
             }
         return no_match_answer
 
+    # Retrieval scans the full corpus; only the selected evidence set is sent to GPT context.
     clauses_text = format_clauses_for_gpt(selected_clauses)
 
     system_prompt = f"""You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), located in Waller and Grimes Counties, Texas.
