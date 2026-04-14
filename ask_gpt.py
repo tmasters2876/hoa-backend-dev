@@ -153,7 +153,14 @@ def retrieve_relevant_clauses(question, limit=6):
             if re.search(r"\b\d+\s*(feet|foot|ft|inches|inch|in)\b", searchable):
                 score += 60
 
-        if score > 0:
+        if is_fence_height:
+            MIN_SCORE = 20
+        elif is_architectural_question:
+            MIN_SCORE = 10
+        else:
+            MIN_SCORE = 6
+
+        if score >= MIN_SCORE:
             scored.append((score, clause))
 
     if not scored:
