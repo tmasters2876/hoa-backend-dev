@@ -312,6 +312,8 @@ INSTRUCTIONS:
     1. Explicit rule
     2. Likely interpretation
     3. Not addressed
+16. Do NOT use phrases like "this implies" or "this means" unless the clause explicitly states it.
+17. When interpreting, always say: "This may suggest..." or "This could be interpreted as..."
 
 Use HTML links for citations: <a href="LINK" target="_blank">CITATION</a>"""
 
