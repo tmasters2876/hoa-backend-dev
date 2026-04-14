@@ -237,7 +237,7 @@ Below are candidate clauses retrieved from the governing documents. Your job is 
 1. Identify which clauses DIRECTLY answer or are clearly relevant to this question
 2. Note if any amendment or higher-authority document supersedes another clause
 3. Return ONLY the clause IDs that are genuinely relevant, ordered from most to least relevant
-4. Be INCLUSIVE — if a clause partially addresses the question, include it
+4. Be INCLUSIVE — if a clause partially addresses the question, include it. Consider synonyms: 'tall', 'height', 'feet', 'maximum', 'minimum' all relate to size/height questions. 'rent', 'lease', 'tenant' all relate to rental questions. 'livestock', 'animals', 'poultry' all relate to pet/animal questions.
 5. Be STRICT about irrelevance — do not include clauses that merely share keywords but don't address the topic
 
 Return a JSON object with this exact structure:
