@@ -83,7 +83,7 @@ def format_all_clauses_for_gpt(clauses):
             summary = (c.get("clause_text") or "").strip()[:100]
         else:
             summary = summary[:80]
-        lines.append(f"[{cid}|{doc_short}] {summary}")
+        lines.append(f"[{cid}|{doc_short}|{citation}|{link}]\n{summary}")
     return "\n\n".join(lines)
 
 def format_clauses_for_display(clauses):
