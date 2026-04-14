@@ -200,6 +200,7 @@ def fetch_candidate_clauses(question: str) -> list:
             print(f"[retrieval] WARNING: original keyword search failed: {e}")
 
     print(f"[retrieval] Total unique candidates: {len(candidates)}")
+    print(f"[retrieval] Candidate IDs: {[c.get('clause_id') for c in candidates[:10]]}")
     return candidates
 
 
@@ -419,11 +420,14 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
 
     # Stage 1: Broad retrieval
     candidates = fetch_candidate_clauses(question)
+    print(f"[answer] Candidates count: {len(candidates)}")
 
     # Stage 2: GPT relevance and authority analysis
     authority_notes = ""
     if candidates:
         relevant_clauses = analyze_relevance(question, candidates)
+        print(f"[answer] Relevant clauses count: {len(relevant_clauses)}")
+        print(f"[answer] Relevant IDs: {[c.get('clause_id') for c in relevant_clauses]}")
         if relevant_clauses and relevant_clauses[0].get("_authority_notes"):
             authority_notes = relevant_clauses[0]["_authority_notes"]
     else:
