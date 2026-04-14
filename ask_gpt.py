@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import random
 from dotenv import load_dotenv
 from supabase import create_client
@@ -199,102 +198,7 @@ def fetch_candidate_clauses(question: str) -> list:
             print(f"[retrieval] WARNING: original keyword search failed: {e}")
 
     print(f"[retrieval] Total unique candidates: {len(candidates)}")
-    print(f"[retrieval] Candidate IDs: {[c.get('clause_id') for c in candidates[:10]]}")
     return candidates
-
-
-# =========================
-# Stage 2: GPT Relevance & Authority Analysis
-# =========================
-def analyze_relevance(question: str, candidates: list) -> list:
-    """
-    Ask GPT to identify which candidate clauses actually answer the question,
-    applying document hierarchy. Returns ordered list of relevant clauses.
-    """
-    if not candidates:
-        return []
-
-    # Build compact clause summaries for GPT to evaluate
-    clause_summaries = []
-    for c in candidates:
-        cid = c.get("clause_id", "unknown")
-        doc = c.get("document", "Unknown document")
-        prec = c.get("precedence_level", "?")
-        summary = c.get("plain_summary") or c.get("clause_text", "")[:300]
-        clause_summaries.append(
-            f'ID: {cid} | Authority Level: {prec} | Document: {doc}\nContent: {summary}'
-        )
-
-    clauses_text = "\n\n---\n\n".join(clause_summaries)
-
-    analysis_prompt = f"""You are an expert HOA document analyst for Plantation Lakes Community Association in Texas.
-
-{DOCUMENT_HIERARCHY}
-
-RESIDENT QUESTION: {question}
-
-Below are candidate clauses retrieved from the governing documents. Your job is to:
-1. Identify which clauses DIRECTLY answer or are clearly relevant to this question
-2. Note if any amendment or higher-authority document supersedes another clause
-3. Return ONLY the clause IDs that are genuinely relevant, ordered from most to least relevant
-4. Be INCLUSIVE — if a clause partially addresses the question, include it. Consider synonyms: 'tall', 'height', 'feet', 'maximum', 'minimum' all relate to size/height questions. 'rent', 'lease', 'tenant' all relate to rental questions. 'livestock', 'animals', 'poultry' all relate to pet/animal questions.
-5. Be STRICT about irrelevance — do not include clauses that merely share keywords but don't address the topic
-
-Return a JSON object with this exact structure:
-{{
-  "relevant_ids": ["CLAUSE_ID_1", "CLAUSE_ID_2", ...],
-  "authority_notes": "Brief note if any document hierarchy issues exist (e.g. Amendment supersedes CCR)",
-  "confidence": "high|medium|low"
-}}
-
-Return ONLY the JSON object, no other text.
-
-CANDIDATE CLAUSES:
-{clauses_text}"""
-
-    try:
-        response = client.chat.completions.create(
-            model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"),
-            messages=[
-                {"role": "system", "content": "You are an expert HOA document analyst. Return only valid JSON."},
-                {"role": "user", "content": analysis_prompt}
-            ],
-            temperature=0.0,
-            max_tokens=500,
-        )
-        raw = response.choices[0].message.content.strip()
-        raw = re.sub(r'```json|```', '', raw).strip()
-        result = json.loads(raw)
-
-        relevant_ids = result.get("relevant_ids", [])
-        authority_notes = result.get("authority_notes", "")
-        confidence = result.get("confidence", "medium")
-
-        print(f"[analysis] GPT identified {len(relevant_ids)} relevant clauses (confidence: {confidence})")
-        if authority_notes:
-            print(f"[analysis] Authority notes: {authority_notes}")
-
-        # Build ordered list of relevant clauses
-        by_id = {c.get("clause_id"): c for c in candidates}
-        relevant = []
-        for cid in relevant_ids:
-            if cid in by_id:
-                c = by_id[cid]
-                if authority_notes:
-                    c["_authority_notes"] = authority_notes
-                relevant.append(c)
-
-        # If GPT returned nothing, fall back to top candidates by precedence
-        if not relevant and candidates:
-            print("[analysis] GPT returned no relevant clauses, using top candidates by precedence")
-            relevant = sorted(candidates, key=lambda c: int(c.get("precedence_level", 99)))[:5]
-
-        return relevant
-
-    except Exception as e:
-        print(f"[analysis] WARNING: GPT analysis failed: {e}")
-        # Fall back to returning top candidates sorted by precedence
-        return sorted(candidates, key=lambda c: int(c.get("precedence_level", 99)))[:10]
 
 
 # =========================
@@ -342,7 +246,7 @@ def format_clauses_for_prompt(clauses):
 # =========================
 # Stage 3: Build Final Answer
 # =========================
-def build_gpt_prompt(question, clause_text, no_matches=False, authority_notes=""):
+def build_gpt_prompt(question, clause_text, no_matches=False):
     if no_matches:
         fallback_msg = (
             "Note: No clauses directly matched this question. "
@@ -351,14 +255,10 @@ def build_gpt_prompt(question, clause_text, no_matches=False, authority_notes=""
     else:
         fallback_msg = ""
 
-    authority_section = ""
-    if authority_notes:
-        authority_section = f"\nDocument Authority Note: {authority_notes}\n"
-
     return f"""Resident Question:
 {question}
 
-{fallback_msg}{authority_section}
+{fallback_msg}
 {DOCUMENT_HIERARCHY}
 
 Relevant Clauses (already filtered and ordered by relevance and authority):
@@ -412,35 +312,28 @@ def fetch_soft_fallback_clauses():
 # MAIN
 # =========================
 def answer_question(question, tags=None, mode="default", structure_type=None, concern_level=None, output_format="markdown"):
-    # Check for whimsy first
     whimsy_reply = check_instant_whimsy(question.lower().strip())
     if whimsy_reply:
         return whimsy_reply
 
     # Stage 1: Broad retrieval
     candidates = fetch_candidate_clauses(question)
-    print(f"[answer] Candidates count: {len(candidates)}")
-
-    # Stage 2: GPT relevance and authority analysis
-    authority_notes = ""
-    if candidates:
-        relevant_clauses = analyze_relevance(question, candidates)
-        print(f"[answer] Relevant clauses count: {len(relevant_clauses)}")
-        print(f"[answer] Relevant IDs: {[c.get('clause_id') for c in relevant_clauses]}")
-        if relevant_clauses and relevant_clauses[0].get("_authority_notes"):
-            authority_notes = relevant_clauses[0]["_authority_notes"]
-    else:
-        relevant_clauses = []
 
     # Fall back to soft fallback if nothing found
     no_matches = False
-    if not relevant_clauses:
-        relevant_clauses = fetch_soft_fallback_clauses()
+    if not candidates:
+        candidates = fetch_soft_fallback_clauses()
         no_matches = True
 
-    # Stage 3: Format and generate final answer
-    clause_text = format_clauses_for_prompt(relevant_clauses)
-    prompt = build_gpt_prompt(question, clause_text, no_matches, authority_notes)
+    # Stage 2: GPT answers directly from all candidates
+    # Sort by precedence so highest authority appears first
+    sorted_candidates = sorted(
+        candidates,
+        key=lambda c: int(c.get("precedence_level", 99))
+    )
+
+    clause_text = format_clauses_for_prompt(sorted_candidates)
+    prompt = build_gpt_prompt(question, clause_text, no_matches)
 
     gpt_response = client.chat.completions.create(
         model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o"),
@@ -449,11 +342,14 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
                 "You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), "
                 "located in Waller and Grimes Counties, Texas. "
                 "You help residents understand their HOA governing documents in plain English. "
-                "You have access to the full document hierarchy and relevant clauses. "
-                "Always give specific, direct answers grounded in the provided clauses. "
-                "Never fabricate rules. Never provide legal advice. "
-                "When rules conflict, apply the document hierarchy provided. "
-                "Always recommend contacting the ARC or board for approval decisions."
+                "You will be given a set of candidate clauses retrieved from the governing documents. "
+                "Many of these clauses may not be relevant to the question — ignore them. "
+                "Focus only on clauses that directly answer the resident's question. "
+                "Apply the document hierarchy: Texas Property Code > CCRs > Amendments > Bylaws > Resolutions > Builders Guidelines. "
+                "When documents conflict, the higher authority governs. "
+                "Give specific, direct answers. Never fabricate rules. "
+                "Never provide legal advice. "
+                "Recommend contacting the ARC or board for approval decisions."
             )},
             {"role": "user", "content": prompt}
         ],
@@ -467,7 +363,7 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
         return {
             "question": question,
             "answer": final_answer,
-            "clauses": relevant_clauses,
+            "clauses": sorted_candidates,
             "mode": mode,
             "format": "json"
         }
