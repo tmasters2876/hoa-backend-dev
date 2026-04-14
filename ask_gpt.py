@@ -314,6 +314,9 @@ INSTRUCTIONS:
     3. Not addressed
 16. Do NOT use phrases like "this implies" or "this means" unless the clause explicitly states it.
 17. When interpreting, always say: "This may suggest..." or "This could be interpreted as..."
+18. Never embed interpretation inside factual statements.
+19. Always separate interpretation using a labeled section: "Interpretation:"
+20.Do not use phrases like "which could include" or "this suggests" inside factual clauses.
 
 Use HTML links for citations: <a href="LINK" target="_blank">CITATION</a>"""
 
