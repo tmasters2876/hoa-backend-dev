@@ -188,6 +188,26 @@ Answer the resident's question using only the clauses above."""
     final_answer = response.choices[0].message.content
     final_answer = re.sub(r"\[(.*?)\] \((.*?)\)", r"\1 \2", final_answer)
 
+    # Replace any fabricated clause ID links with correct Google Drive URLs
+    by_id = {c.get("clause_id"): c for c in all_clauses}
+    def replace_clause_link(match):
+        href = match.group(1)
+        text = match.group(2)
+        # Extract clause ID from fabricated URLs like /DECL_27_08 or #DECL_27_08
+        cid_match = re.search(r'([A-Z][A-Z0-9_\-]{3,})', href)
+        if cid_match:
+            cid = cid_match.group(1)
+            if cid in by_id and by_id[cid].get("link"):
+                correct_link = by_id[cid]["link"]
+                return f'<a href="{correct_link}" target="_blank" rel="noopener noreferrer">{text}</a>'
+        return match.group(0)
+
+    final_answer = re.sub(
+        r'<a\s+href="([^"]*)"[^>]*>([^<]+)</a>',
+        replace_clause_link,
+        final_answer
+    )
+
     cited_ids = set(re.findall(r'\b([A-Z][A-Z0-9_\-]{3,})\b', final_answer))
     by_id = {c.get("clause_id"): c for c in all_clauses}
     cited_clauses = [by_id[cid] for cid in cited_ids if cid in by_id]
