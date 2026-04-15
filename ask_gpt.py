@@ -210,6 +210,24 @@ Answer the resident's question using only the clauses above."""
         final_answer
     )
 
+    # Replace plain-text clause ID references like (DECL_27_08)
+    # or DECL_27_08 with proper linked citations
+    def replace_plain_clause_id(match):
+        cid = match.group(1)
+        if cid in by_id:
+            clause = by_id[cid]
+            link = clause.get("link", "")
+            citation = clause.get("citation", cid)
+            if link:
+                return f'<a href="{link}" target="_blank" rel="noopener noreferrer">{citation}</a>'
+        return match.group(0)
+
+    final_answer = re.sub(
+        r'\b([A-Z][A-Z0-9_]{3,}(?:_[A-Z0-9]+)+)\b',
+        replace_plain_clause_id,
+        final_answer
+    )
+
     cited_ids = set(re.findall(r'\b([A-Z][A-Z0-9_\-]{3,})\b', final_answer))
     by_id = {c.get("clause_id"): c for c in all_clauses}
     cited_clauses = [by_id[cid] for cid in cited_ids if cid in by_id]
