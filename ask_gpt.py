@@ -267,8 +267,6 @@ Answer the resident's question using only the clauses above."""
             key=lambda c: int(c.get("precedence_level", 99)))
             if "Texas Property Code" not in (c.get("document") or "")][:3]
 
-    display_text = format_clauses_for_display(cited_clauses[:5])
-
     if output_format == "json":
         return {
             "question": question,
@@ -278,4 +276,10 @@ Answer the resident's question using only the clauses above."""
             "format": "json"
         }
 
-    return f"{final_answer}<br><br>{display_text}"
+    # Only show display cards if we have genuinely cited clauses
+    # If none found, the answer already contains inline linked citations
+    if cited_clauses:
+        display_text = format_clauses_for_display(cited_clauses[:5])
+        return f"{final_answer}<br><br>{display_text}"
+
+    return final_answer
