@@ -276,10 +276,32 @@ Answer the resident's question using only the clauses above."""
             "format": "json"
         }
 
-    # Only show display cards if we have genuinely cited clauses
-    # If none found, the answer already contains inline linked citations
+    # If GPT produced inline citations, answer is self-contained
     if cited_clauses:
-        display_text = format_clauses_for_display(cited_clauses[:5])
+        return final_answer
+
+    # No inline citations found — show the top relevant clauses
+    # as source references so residents can verify
+    # Use clauses that were retrieved, filtered to non-TX-Code first
+    hoa_clauses = [c for c in all_clauses
+                   if "Texas Property Code" not in (c.get("document") or "")]
+
+    # Try to find clauses relevant to the question by simple keyword match
+    q_lower = question.lower()
+    q_words = set(w for w in re.findall(r'[a-z]+', q_lower) if len(w) > 3)
+
+    scored = []
+    for c in hoa_clauses:
+        text = ((c.get("plain_summary") or "") + " " + (c.get("clause_text") or "")).lower()
+        score = sum(1 for w in q_words if w in text)
+        if score > 0:
+            scored.append((score, c))
+
+    scored.sort(key=lambda x: (-x[0], int(x[1].get("precedence_level", 99))))
+    fallback_clauses = [c for _, c in scored[:3]]
+
+    if fallback_clauses:
+        display_text = format_clauses_for_display(fallback_clauses)
         return f"{final_answer}<br><br>{display_text}"
 
     return final_answer
