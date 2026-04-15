@@ -82,7 +82,7 @@ def format_all_clauses_for_gpt(clauses):
         if not summary:
             summary = (c.get("clause_text") or "").strip()[:100]
         else:
-            summary = summary[:120]
+            summary = summary[:80]
         lines.append(f"[{cid}|{doc_short}|{citation}]\n{summary}")
     return "\n\n".join(lines)
 
@@ -168,7 +168,7 @@ INSTRUCTIONS:
 - Never fabricate rules not present in the provided clauses
 - Never provide legal advice
 - For ARC approval decisions, recommend the resident contact the ARC directly
-- Use HTML links for citations: <a href="LINK" target="_blank">CITATION</a>
+- When citing a clause, reference it by its clause ID in square brackets like [DECL_27_08]. Do not generate HTML links. Do not use the word CITATION. Just use the clause ID.
 - Close with: "If you have any other questions, feel free to ask!" """
 
     user_prompt = f"""Resident Question: {question}
@@ -188,38 +188,9 @@ Answer the resident's question using only the clauses above."""
     )
 
     final_answer = response.choices[0].message.content
-    final_answer = re.sub(r"\[(.*?)\] \((.*?)\)", r"\1 \2", final_answer)
-
-    # Replace any fabricated clause ID links with correct Google Drive URLs
+    # Replace all [CLAUSE_ID] references with proper linked citations
     by_id = {c.get("clause_id"): c for c in all_clauses}
-    def replace_clause_link(match):
-        href = match.group(1)
-        text = match.group(2)
-        # Skip links that already point to Google Drive
-        if "drive.google.com" in href:
-            return match.group(0)
-        # Extract clause ID from fabricated URLs
-        cid_match = re.search(r'([A-Z][A-Z0-9_\-]{3,})', href)
-        if cid_match:
-            cid = cid_match.group(1)
-            if cid in by_id and by_id[cid].get("link"):
-                correct_link = by_id[cid]["link"]
-                citation = by_id[cid].get("citation", text)
-                return f'<a href="{correct_link}" target="_blank" rel="noopener noreferrer">{citation}</a>'
-        # Fix generic CITATION text with no real href
-        if text.upper() == "CITATION" or text.upper() == "SOURCE":
-            return ""
-        return match.group(0)
-
-    final_answer = re.sub(
-        r'<a\s+href="([^"]*)"[^>]*>([^<]+)</a>',
-        replace_clause_link,
-        final_answer
-    )
-
-    # Replace plain-text clause ID references like (DECL_27_08)
-    # or DECL_27_08 with proper linked citations
-    def replace_plain_clause_id(match):
+    def replace_bracketed_id(match):
         cid = match.group(1)
         if cid in by_id:
             clause = by_id[cid]
@@ -227,11 +198,12 @@ Answer the resident's question using only the clauses above."""
             citation = clause.get("citation", cid)
             if link:
                 return f'<a href="{link}" target="_blank" rel="noopener noreferrer">{citation}</a>'
+            return citation
         return match.group(0)
 
     final_answer = re.sub(
-        r'\b([A-Z][A-Z0-9_]{3,}(?:_[A-Z0-9]+)+)\b',
-        replace_plain_clause_id,
+        r'\[([A-Z][A-Z0-9_\-]{3,})\]',
+        replace_bracketed_id,
         final_answer
     )
 
