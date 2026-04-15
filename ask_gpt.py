@@ -188,19 +188,63 @@ Answer the resident's question using only the clauses above."""
     )
 
     final_answer = response.choices[0].message.content
-    # Replace all [CLAUSE_ID] references with proper linked citations
+    # Build lookup by clause ID
     by_id = {c.get("clause_id"): c for c in all_clauses}
+
+    DOC_SHORT_DISPLAY = {
+        "Declaration_of_Covenants,_Conditions,_&_Restrictions_-_09-17-2004.pdf": "CCRs",
+        "First_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_10-05-2004.pdf": "CCR First Amendment",
+        "1Second_Amendment_to_the_Declaration_of_Covenants,_Conditions_and_Restrictions_11-08-2005.pdf": "CCR Second Amendment",
+        "Supplemental_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_Sec_2_-_(Waller_Cty_10-4-2004).pdf": "CCR Supplemental Sec 2",
+        "Supplemental_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_Sec_3_(Grimes_Cty_-_11-16-2004).pdf": "CCR Supplemental Sec 3",
+        "Supplemental_Amendment_to_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_Sec_4_-_11-02-2005.pdf": "CCR Supplemental Sec 4",
+        "Amendment_to_DCC&R_-_11.04.19.pdf": "CCR 2019 Amendment",
+        "ByLaws_-_PLCA_-_10-19-2004.pdf": "PLCA Bylaws",
+        "Articles_of_Incorporation_-_Waller_-_3-26-18.pdf": "Articles of Incorporation",
+        "PLCA_-_Articles_of_Incorporation_-_Grimes_-_3-26-18.pdf": "Articles of Incorporation",
+        "Resolution_Adopting_Covenants,_Conditions_&_Restrictions_Enforcement_Process_(Recorded_Waller_Co_-_02-09-17.pdf": "Enforcement Resolution",
+        "Resolution_Adopting_Conditions,_Conditions_&_Restrictions_Enforcement_Process_-_(Grimes_Cty_02-27-2017).pdf": "Enforcement Resolution",
+        "Recorded_Adopting_Governing_Documents_Enforcement_Process_and_Fine_Policies_(Grimes)_Fixed.pdf": "Enforcement & Fine Policy",
+        "2022_Recorded_Adopting_Governing_Documents_Enforcement_Process_and_Fine_Policies_(Waller).pdf": "Enforcement & Fine Policy",
+        "Resolution_Clarifying_Articles_7_and_8_of_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_(Grimes_Cty_05-01-2017).pdf": "Clarifying Resolution",
+        "Resolution_Clarfying_Articles_7_and_8_of_the_Declaration_of_Covenants,_Conditions_&_Restrictions_-_(Waller_Cty_04-26-2017).pdf": "Clarifying Resolution",
+        "Resolution_Regarding_Assessment_of_Fines_for_Violations_of_Restrictive_Covenants_and-or_Rules_&_Regulations__-_(Waller_01-23-2012_&_Grimes_02-22-2012).pdf": "Fine Schedule",
+        "Regulation_of_Solar_Panels,_Roof_Shingles,_Flag,_Flag_Poles,_Religious_Items_and_Rain_Barrels_-_(Waller_01-23-2012_&_Grimes_02-22-2012).pdf": "Solar, Flags & Rain Barrel Regulations",
+        "Recorded_Resolution_Window_Coverings_Waller-Fixed.pdf": "Window Coverings Resolution",
+        "2022 Builders Guidelines & Application": "2022 Builders Guidelines",
+        "Texas Property Code Chapter 202": "Texas Property Code Ch. 202",
+        "Texas Property Code Chapter 207": "Texas Property Code Ch. 207",
+        "Texas Property Code Chapter 209": "Texas Property Code Ch. 209",
+        "Texas Property Code Chapter 5": "Texas Property Code Ch. 5",
+    }
+
     def replace_bracketed_id(match):
         cid = match.group(1)
         if cid in by_id:
             clause = by_id[cid]
             link = clause.get("link", "")
-            citation = clause.get("citation", cid)
+            citation = clause.get("citation", "")
+            doc = clause.get("document", "")
+            doc_display = DOC_SHORT_DISPLAY.get(doc, doc)
+            # Build display text as "Document Name, Citation"
+            # citation already contains page/section info like "Page 13" or "Article VI, Section B"
+            if citation:
+                display_text = f"{doc_display}, {citation}"
+            else:
+                display_text = doc_display
             if link:
-                return f'<a href="{link}" target="_blank" rel="noopener noreferrer">{citation}</a>'
-            return citation
-        return match.group(0)
+                return f'<a href="{link}" target="_blank" rel="noopener noreferrer">{display_text}</a>'
+            return display_text
+        return ""
 
+    # Clean up malformed [WALLS_01|BG2022|Page 13] to [WALLS_01]
+    final_answer = re.sub(
+        r'\[([A-Z][A-Z0-9_\-]{3,})[^\]]*\]',
+        lambda m: f'[{m.group(1)}]',
+        final_answer
+    )
+
+    # Replace [CLAUSE_ID] with proper linked citation
     final_answer = re.sub(
         r'\[([A-Z][A-Z0-9_\-]{3,})\]',
         replace_bracketed_id,
