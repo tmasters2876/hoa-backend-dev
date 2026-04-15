@@ -169,6 +169,9 @@ INSTRUCTIONS:
 - Never provide legal advice
 - For ARC approval decisions, recommend the resident contact the ARC directly
 - When citing a clause, reference it by its clause ID in square brackets like [DECL_27_08]. Do not generate HTML links. Do not use the word CITATION. Just use the clause ID.
+- When multiple consecutive sentences reference the same document, do not repeat the citation after each sentence. Instead, cite once at the end of the paragraph or group of related points.
+- Group related rules into paragraphs rather than citing every individual sentence separately.
+- If listing multiple requirements from the same document, use a bulleted list with a single citation at the top or bottom of the list, not after each bullet.
 - Close with: "If you have any other questions, feel free to ask!" """
 
     user_prompt = f"""Resident Question: {question}
