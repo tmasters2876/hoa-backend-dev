@@ -100,7 +100,7 @@ def format_clauses_for_display(clauses):
             link_html = citation
         entry = (
             f"<b>{idx}. <strong>Summary</strong>: According to {link_html}, {summary}.</b><br>"
-            f"<strong>Document</strong>: <code>{document}</code><br>"
+            f"<strong>Source</strong>: <code>{document}</code><br>"
         )
         if clause_text and idx <= 2:
             trimmed = clause_text[:1500] + "…" if len(clause_text) > 1500 else clause_text
@@ -157,7 +157,9 @@ DOCUMENT AUTHORITY ORDER (highest to lowest):
 
 INSTRUCTIONS:
 - Find every clause that is relevant to the question, regardless of which document it comes from
-- When documents conflict, apply the authority order above — state which document governs and why
+- When documents conflict, apply the authority order above
+- IMPORTANT EXCEPTION: The CCRs explicitly delegate architectural and design standards to the Builders Guidelines and ARC. When a CCR clause says "per the Builder Guidelines" or "as approved by the ARC", the Builders Guidelines rule on that topic is authoritative — it is not overridden by the CCR. In these cases, cite both: the CCR as the granting authority and the Builders Guidelines as the specific rule.
+- Only flag a conflict when two documents genuinely contradict each other on the same point without one delegating to the other
 - Give a specific, direct answer. Do not be vague.
 - Clearly state whether something is: allowed, prohibited, requires ARC approval, or not addressed
 - Cite the specific document and citation for every rule you reference
