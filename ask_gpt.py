@@ -82,7 +82,7 @@ def format_all_clauses_for_gpt(clauses):
         if not summary:
             summary = (c.get("clause_text") or "").strip()[:100]
         else:
-            summary = summary[:60]
+            summary = summary[:120]
         lines.append(f"[{cid}|{doc_short}|{citation}]\n{summary}")
     return "\n\n".join(lines)
 
@@ -195,13 +195,20 @@ Answer the resident's question using only the clauses above."""
     def replace_clause_link(match):
         href = match.group(1)
         text = match.group(2)
-        # Extract clause ID from fabricated URLs like /DECL_27_08 or #DECL_27_08
+        # Skip links that already point to Google Drive
+        if "drive.google.com" in href:
+            return match.group(0)
+        # Extract clause ID from fabricated URLs
         cid_match = re.search(r'([A-Z][A-Z0-9_\-]{3,})', href)
         if cid_match:
             cid = cid_match.group(1)
             if cid in by_id and by_id[cid].get("link"):
                 correct_link = by_id[cid]["link"]
-                return f'<a href="{correct_link}" target="_blank" rel="noopener noreferrer">{text}</a>'
+                citation = by_id[cid].get("citation", text)
+                return f'<a href="{correct_link}" target="_blank" rel="noopener noreferrer">{citation}</a>'
+        # Fix generic CITATION text with no real href
+        if text.upper() == "CITATION" or text.upper() == "SOURCE":
+            return ""
         return match.group(0)
 
     final_answer = re.sub(
