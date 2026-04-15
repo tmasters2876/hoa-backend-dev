@@ -79,10 +79,10 @@ def format_all_clauses_for_gpt(clauses):
         citation = c.get("citation", "")
         link = c.get("link", "")
         summary = (c.get("plain_summary") or "").strip()
-        if not summary:
-            summary = (c.get("clause_text") or "").strip()[:100]
-        else:
-            summary = summary[:120]
+        clause_text = (c.get("clause_text") or "").strip()
+        if clause_text:
+            summary = f"{summary} | FULL TEXT: {clause_text}"
+        summary = summary[:400]
         lines.append(f"[{cid}|{doc_short}|{citation}]\n{summary}")
     return "\n\n".join(lines)
 
