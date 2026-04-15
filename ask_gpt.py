@@ -172,6 +172,7 @@ INSTRUCTIONS:
 - When multiple consecutive sentences reference the same document, do not repeat the citation after each sentence. Instead, cite once at the end of the paragraph or group of related points.
 - Group related rules into paragraphs rather than citing every individual sentence separately.
 - If listing multiple requirements from the same document, use a bulleted list with a single citation at the top or bottom of the list, not after each bullet.
+- When multiple rules come from the same document, summarize them together in one paragraph with a single citation at the end. Do not cite the same document repeatedly on every sentence.
 - Close with: "If you have any other questions, feel free to ask!" """
 
     user_prompt = f"""Resident Question: {question}
