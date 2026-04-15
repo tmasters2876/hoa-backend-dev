@@ -212,8 +212,16 @@ Answer the resident's question using only the clauses above."""
     cited_clauses = [by_id[cid] for cid in cited_ids if cid in by_id]
     cited_clauses.sort(key=lambda c: int(c.get("precedence_level", 99)))
 
+    # Cap Texas Property Code to 1 result in display
+    tx_clauses = [c for c in cited_clauses if "Texas Property Code" in (c.get("document") or "")]
+    hoa_clauses = [c for c in cited_clauses if "Texas Property Code" not in (c.get("document") or "")]
+    cited_clauses = hoa_clauses + tx_clauses[:1]
+
     if not cited_clauses:
-        cited_clauses = sorted(all_clauses, key=lambda c: int(c.get("precedence_level", 99)))[:3]
+        # Fallback: show top HOA clauses by precedence, no TX Code
+        cited_clauses = [c for c in sorted(all_clauses,
+            key=lambda c: int(c.get("precedence_level", 99)))
+            if "Texas Property Code" not in (c.get("document") or "")][:3]
 
     display_text = format_clauses_for_display(cited_clauses[:5])
 
