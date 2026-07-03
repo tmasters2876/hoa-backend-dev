@@ -26,7 +26,7 @@ def get_all_clauses():
         result = (
             supabase
             .from_("clauses")
-            .select("clause_id,document,page,citation,clause_text,plain_summary,link,precedence_level")
+            .select("clause_id,document,page,citation,clause_text,plain_summary,link,precedence_level,tags")
             .eq("status", "approved")
             .range(offset, offset + page_size - 1)
             .execute()
@@ -111,6 +111,49 @@ def format_clauses_for_display(clauses):
         formatted.append(entry)
     return "<br><br>".join(formatted)
 
+def filter_relevant_clauses(question, all_clauses, tags=None, min_results=15, min_score=2):
+    """
+    Score each clause by keyword overlap with the question (same tokenization
+    convention as the no-citation fallback below: re.findall(r'[a-z]+', ...),
+    len(w) > 3), plus a higher-weighted match against the clause's own `tags`
+    array and any explicit `tags` the caller passed in.
+
+    Returns clauses scoring >= min_score, sorted by score desc then
+    precedence_level asc. Safety net: if fewer than `min_results` clear the
+    bar, there wasn't a reliable relevance signal, so this returns
+    `all_clauses` completely unfiltered -- identical to the old full-corpus
+    behavior. No upper cap is applied to a genuinely large matched set.
+    Pure function: never mutates its input.
+    """
+    q_words = set(w for w in re.findall(r'[a-z]+', question.lower()) if len(w) > 3)
+    explicit_tags = set(t.strip().lower() for t in (tags or []) if t and t.strip())
+
+    TAG_MATCH_WEIGHT = 3        # curated tags outweigh incidental text hits
+    EXPLICIT_TAG_WEIGHT = 5     # caller-supplied tags are the strongest signal
+
+    scored = []
+    for c in all_clauses:
+        text = ((c.get("plain_summary") or "") + " " + (c.get("clause_text") or "")).lower()
+        text_score = sum(1 for w in q_words if w in text)
+
+        clause_tags = [(t or "").strip().lower() for t in (c.get("tags") or [])]
+        tag_overlap = sum(
+            1 for t in clause_tags
+            if t and (t in q_words or any(t in w or w in t for w in q_words))
+        )
+        explicit_overlap = sum(1 for t in clause_tags if t in explicit_tags)
+
+        score = text_score + TAG_MATCH_WEIGHT * tag_overlap + EXPLICIT_TAG_WEIGHT * explicit_overlap
+        if score > 0:
+            scored.append((score, c))
+
+    matched = [(s, c) for s, c in scored if s >= min_score]
+    if len(matched) < min_results:
+        return all_clauses  # not enough signal -- send everything, exactly as before
+
+    matched.sort(key=lambda pair: (-pair[0], int(pair[1].get("precedence_level", 99))))
+    return [c for _, c in matched]
+
 def check_instant_whimsy(question_lower):
     creator_keywords = [
         "creator", "developer", "who made you", "who built you",
@@ -139,7 +182,10 @@ def answer_question(question, tags=None, mode="default", structure_type=None, co
         return whimsy_reply
 
     all_clauses = get_all_clauses()
-    clauses_text = format_all_clauses_for_gpt(all_clauses)
+    relevant_clauses = all_clauses
+    if os.getenv("ENABLE_CLAUSE_PREFILTER", "true").lower() != "false":
+        relevant_clauses = filter_relevant_clauses(question, all_clauses, tags=tags)
+    clauses_text = format_all_clauses_for_gpt(relevant_clauses)
 
     system_prompt = """You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), located in Waller and Grimes Counties, Texas.
 
