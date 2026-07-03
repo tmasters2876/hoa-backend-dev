@@ -294,6 +294,9 @@ Answer the resident's question using only the clauses above."""
         final_answer
     )
 
+    # Capture cited IDs after bracket cleanup but before link injection
+    raw_cited_ids = set(re.findall(r'\[([A-Z][A-Z0-9_\-]{3,})\]', final_answer))
+
     # Replace [CLAUSE_ID] with proper linked citation
     final_answer = re.sub(
         r'\[([A-Z][A-Z0-9_\-]{3,})\]',
@@ -301,9 +304,8 @@ Answer the resident's question using only the clauses above."""
         final_answer
     )
 
-    cited_ids = set(re.findall(r'\b([A-Z][A-Z0-9_\-]{3,})\b', final_answer))
     by_id = {c.get("clause_id"): c for c in all_clauses}
-    cited_clauses = [by_id[cid] for cid in cited_ids if cid in by_id]
+    cited_clauses = [by_id[cid] for cid in raw_cited_ids if cid in by_id]
     cited_clauses.sort(key=lambda c: int(c.get("precedence_level", 99)))
 
     # Cap Texas Property Code to 1 result in display
