@@ -1,6 +1,7 @@
 import os
 import re
 import random
+import time
 from dotenv import load_dotenv
 from supabase import create_client
 from openai import OpenAI
@@ -14,10 +15,20 @@ supabase = create_client(
 )
 
 _clause_cache = None
+_cache_loaded_at = 0.0
+# Approved clause edits reach residents within this window without a
+# redeploy. 0 disables caching entirely (every request refetches).
+CACHE_TTL_SECONDS = int(os.getenv("CLAUSE_CACHE_TTL", "3600"))
+
+
+def invalidate_clause_cache():
+    global _clause_cache
+    _clause_cache = None
+
 
 def get_all_clauses():
-    global _clause_cache
-    if _clause_cache is not None:
+    global _clause_cache, _cache_loaded_at
+    if _clause_cache is not None and (time.time() - _cache_loaded_at) < CACHE_TTL_SECONDS:
         return _clause_cache
     all_clauses = []
     page_size = 1000
@@ -37,7 +48,8 @@ def get_all_clauses():
             break
         offset += page_size
     _clause_cache = all_clauses
-    print(f"[cache] Loaded {len(all_clauses)} approved clauses")
+    _cache_loaded_at = time.time()
+    print(f"[cache] Loaded {len(all_clauses)} approved clauses (TTL {CACHE_TTL_SECONDS}s)")
     return all_clauses
 
 def format_all_clauses_for_gpt(clauses):
@@ -125,6 +137,21 @@ def filter_relevant_clauses(question, all_clauses, tags=None, min_results=15, mi
     behavior. No upper cap is applied to a genuinely large matched set.
     Pure function: never mutates its input.
     """
+    scored = _score_clauses(question, all_clauses, tags=tags)
+
+    matched = [(s, c) for s, c in scored if s >= min_score]
+    if len(matched) < min_results:
+        return all_clauses  # not enough signal -- send everything, exactly as before
+
+    matched.sort(key=lambda pair: (-pair[0], int(pair[1].get("precedence_level", 99))))
+    return [c for _, c in matched]
+
+
+def _score_clauses(question, all_clauses, tags=None):
+    """The one scoring loop, shared by filter_relevant_clauses() (production)
+    and filter_relevant_clauses_debug() (admin Search Test) so the admin
+    panel can never drift from what residents actually get. Returns
+    [(score, clause), ...] for every clause scoring > 0, unsorted."""
     q_words = set(w for w in re.findall(r'[a-z]+', question.lower()) if len(w) > 3)
     explicit_tags = set(t.strip().lower() for t in (tags or []) if t and t.strip())
 
@@ -146,13 +173,25 @@ def filter_relevant_clauses(question, all_clauses, tags=None, min_results=15, mi
         score = text_score + TAG_MATCH_WEIGHT * tag_overlap + EXPLICIT_TAG_WEIGHT * explicit_overlap
         if score > 0:
             scored.append((score, c))
+    return scored
 
+
+def filter_relevant_clauses_debug(question, all_clauses, tags=None, min_results=15, min_score=2):
+    """Identical scoring to production (same _score_clauses loop), returning
+    telemetry instead of clauses. matched is sorted score desc / precedence
+    asc and includes every clause that cleared min_score — even when the
+    fallback fires (production would then send the full corpus instead)."""
+    scored = _score_clauses(question, all_clauses, tags=tags)
     matched = [(s, c) for s, c in scored if s >= min_score]
-    if len(matched) < min_results:
-        return all_clauses  # not enough signal -- send everything, exactly as before
-
     matched.sort(key=lambda pair: (-pair[0], int(pair[1].get("precedence_level", 99))))
-    return [c for _, c in matched]
+    return {
+        "matched": matched,
+        "matched_count": len(matched),
+        "fallback_triggered": len(matched) < min_results,
+        "min_results": min_results,
+        "min_score": min_score,
+        "corpus_size": len(all_clauses),
+    }
 
 def check_instant_whimsy(question_lower):
     creator_keywords = [
@@ -176,15 +215,32 @@ def check_instant_whimsy(question_lower):
         ])
     return None
 
-def answer_question(question, tags=None, mode="default", structure_type=None, concern_level=None, output_format="markdown"):
+def answer_question(question, tags=None, mode="default", structure_type=None, concern_level=None, output_format="markdown", meta_out=None):
+    """meta_out: optional dict the caller owns; populated in place with
+    logging metadata (whimsy, cited_ids, prefilter_used,
+    prefilter_clause_count). Never affects the answer itself."""
     whimsy_reply = check_instant_whimsy(question.lower().strip())
     if whimsy_reply:
+        if meta_out is not None:
+            meta_out.update({
+                "whimsy": True,
+                "cited_ids": [],
+                "prefilter_used": None,
+                "prefilter_clause_count": None,
+            })
         return whimsy_reply
 
     all_clauses = get_all_clauses()
     relevant_clauses = all_clauses
     if os.getenv("ENABLE_CLAUSE_PREFILTER", "true").lower() != "false":
         relevant_clauses = filter_relevant_clauses(question, all_clauses, tags=tags)
+    if meta_out is not None:
+        meta_out.update({
+            "whimsy": False,
+            "cited_ids": [],
+            "prefilter_used": len(relevant_clauses) < len(all_clauses),
+            "prefilter_clause_count": len(relevant_clauses),
+        })
     clauses_text = format_all_clauses_for_gpt(relevant_clauses)
 
     system_prompt = """You are the PLCA Board Assistant for Plantation Lakes Community Association (PLCA), located in Waller and Grimes Counties, Texas.
@@ -205,6 +261,7 @@ INSTRUCTIONS:
 - Find every clause that is relevant to the question, regardless of which document it comes from
 - When documents conflict, apply the authority order above
 - IMPORTANT EXCEPTION: The CCRs explicitly delegate architectural and design standards to the Builders Guidelines and ARC. When a CCR clause says "per the Builder Guidelines" or "as approved by the ARC", the Builders Guidelines rule on that topic is authoritative — it is not overridden by the CCR. In these cases, cite both: the CCR as the granting authority and the Builders Guidelines as the specific rule.
+- "OTHER AS APPROVED BY THE ARC" RULE (owner, Oct 2026): when a document lists approved items and the list includes "Other as approved by ARC" (fence materials, roofing, gates, outbuildings), an item that is NOT named is NOT prohibited. It requires ARC approval before installation. Say so plainly: "X is not named in the approved list; it falls under 'Other as approved by the ARC' and requires ARC approval." Call something prohibited ONLY when the documents name it as prohibited (for fences: barbed wire and chain link). Never infer a prohibition from absence.
 - Only flag a conflict when two documents genuinely contradict each other on the same point without one delegating to the other
 - Give a specific, direct answer. Do not be vague.
 - Clearly state whether something is: allowed, prohibited, requires ARC approval, or not addressed
@@ -296,6 +353,11 @@ Answer the resident's question using only the clauses above."""
 
     # Capture cited IDs after bracket cleanup but before link injection
     raw_cited_ids = set(re.findall(r'\[([A-Z][A-Z0-9_\-]{3,})\]', final_answer))
+
+    if meta_out is not None:
+        # Only IDs that resolve to real clauses; hallucinated IDs are
+        # stripped from the answer below and would pollute analytics.
+        meta_out["cited_ids"] = sorted(cid for cid in raw_cited_ids if cid in by_id)
 
     # Replace [CLAUSE_ID] with proper linked citation
     final_answer = re.sub(
