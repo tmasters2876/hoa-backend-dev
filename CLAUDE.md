@@ -4,7 +4,7 @@ Last updated: April 2026
 
 ## Project Summary
 
-`hoa-backend-dev` is the **development branch** of `hoa-backend`. Same architecture — Flask API, OpenAI, Supabase — but receives changes for testing before promotion to production.
+`hoa-backend-dev` is the **Carrd backup service** for `hoa-backend` (owner, Oct 2026). Same architecture — Flask API, OpenAI, Supabase — and the **same production database**. Its answer logic must match production: whenever `ask_gpt.py` changes in `hoa-backend`, copy it here, run the tests and a live `/ask`, commit and push. Last mirrored 2026-10-11 (the "Other as approved by the ARC" rule, cache TTL, shared scoring).
 
 **No admin app in this repo.** Only `app.py` + `ask_gpt.py`.
 
